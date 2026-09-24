@@ -60,6 +60,92 @@ def cxy(i, j):
     return (int(round(BOARD["x0"] + j * BOARD["pitch_x"])),
             int(round(BOARD["y0"] + i * BOARD["pitch_y"])))
 
+def board_alive():
+    """游戏是否活着（内存判据，**不可靠，仅作参考**）。
+
+    ★ 2026-09-24 实测教训：结算画面上 Board 指针【依然有效】——
+      实测停在「最终得分 60,500」画面时 `Board=0x4AD01138` 非零。
+      所以"指针归零"不能用来判断游戏结束，我最早写错了这一点，
+      导致 bot 对着结算画面反复算同一招（手牌一直不变、0.22 步/秒）。
+      判断结束要用画面判据（见 screen_is_gameover）。
+    """
+    try:
+        from reader_mem import _Proc, GAPP_ADDR, OFF_BOARD, _ptr_ok
+        pid = game_pid()
+        if pid is None:
+            return False
+        pr = _Proc(pid)
+        g = pr.u32(GAPP_ADDR)
+        if not _ptr_ok(g):
+            return None
+        b = pr.u32(g + OFF_BOARD)
+        return bool(b)
+    except Exception:
+        return None
+
+
+def screen_is_gameover(frame):
+    """用画面判断是否停在结算画面。
+
+    实测依据（2026-09-24 实拍结算画面）：
+      结算画面是一整块橙色面板 —— 顶部「最终得分」横幅区
+      约 RGB(202,141,84)，中部棋盘区被面板覆盖约 RGB(208,158,91)，
+      两者都是明显的 R > G > B（橙棕色调）。
+      而游戏中棋盘区是深蓝紫背景 + 彩色宝石，不会有这种整体橙棕。
+
+    返回 True/False/None（None = 抓帧失败，无法判断）。
+    """
+    if frame is None:
+        return None
+    try:
+        import numpy as np
+        f = np.asarray(frame, dtype="float32")
+        top = f[45:95, 480:800]
+        mid = f[280:340, 520:880]
+        tr, tg, tb = top[:, :, 0].mean(), top[:, :, 1].mean(), top[:, :, 2].mean()
+        mr, mg, mb = mid[:, :, 0].mean(), mid[:, :, 1].mean(), mid[:, :, 2].mean()
+    except Exception:
+        return None
+    orange_top = (tr > 150 and tr > tg + 25 and tg > tb + 20)
+    orange_mid = (mr > 140 and mr > mg + 20 and mg > mb + 10)
+    return bool(orange_top and orange_mid)
+
+
+def death_shots(cap, d, n=14, gap=0.75):
+    """连拍死亡画面，供人工标定按钮位置。"""
+    import os
+    os.makedirs(d, exist_ok=True)
+    from PIL import Image
+    saved = 0
+    for k in range(n):
+        a = None
+        for _ in range(6):
+            a = cap.get(timeout=0.5)
+            if a is not None:
+                break
+        if a is not None:
+            Image.fromarray(a).save("%s/over_%02d.png" % (d, k))
+            saved += 1
+        time.sleep(gap)
+    return saved
+
+
+# 结算画面按钮坐标（1280x800，实测标定）
+#   依据：2026-09-24 实拍结算画面 —— 底部三个按钮
+#     「徽章」   x≈433, y≈738
+#     「再玩一次」x≈640, y≈738   ← 用这个
+#     「主菜单」 x≈847, y≈738
+RESTART_BTN = (640, 738)
+MAINMENU_BTN = (847, 738)
+
+
+def click_restart(m, btn=None):
+    """点「再来一次」继续玩。"""
+    x, y = btn or RESTART_BTN
+    m.click(x, y)
+    time.sleep(1.0)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--moves", type=int, default=0)
@@ -74,6 +160,10 @@ def main():
     ap.add_argument("--no-click", action="store_true", help="只识别不点击（dry）")
     ap.add_argument("--no-pending", action="store_true",
                     help="关闭 pending 优化（每步都重新等静止）")
+    ap.add_argument("--auto-restart", action="store_true",
+                    help="游戏结束后自动点「再来一次」继续玩（牌局模式死了会用）")
+    ap.add_argument("--death-shot", metavar="DIR",
+                    help="检测到游戏结束时把画面连拍到 DIR（用于标定按钮位置）")
     ap.add_argument("--mode", default="normal", choices=["normal", "poker"],
                     help="游戏模式：normal=普通（每次消除都给分）；"
                          "poker=牌局（只有集齐5张牌型才给分，优先凑同花）")
@@ -124,6 +214,51 @@ def main():
         while True:
             if a.moves and done >= a.moves: break
             if a.max_seconds and time.time() - t0 > a.max_seconds: break
+
+            # ★★ 游戏结束检测 —— 必须放在这里（每轮都查）★★
+            #   2026-09-24 踩过的坑：我最初把它写在 `if g is None:`（读不到棋盘）
+            #   分支里，结果它【从来没被执行过】—— 因为结算画面上棋盘是能读到的
+            #   （Board 指针依然有效，返回冻结的棋盘），所以 `g is None` 不成立。
+            #   症状：bot 对着结算画面一直"下棋"（反复算同一招、手牌恒定不变）。
+            #   判据必须用画面（结算画面是整块橙色面板）。
+            fr_iter = None
+            if a.auto_restart or a.death_shot:
+                if getattr(rd, "cap", None) is not None:
+                    try:
+                        fr_iter = rd.cap.get(timeout=0.5)
+                    except Exception:
+                        fr_iter = None
+                if screen_is_gameover(fr_iter):
+                    log("  ★ 检测到游戏结束（结算画面）")
+                    if a.death_shot:
+                        n = death_shots(cap, a.death_shot)
+                        log("  已连拍 %d 帧到 %s" % (n, a.death_shot))
+                    if a.auto_restart:
+                        click_restart(m)
+                        miss = 0
+                        ok_new = False
+                        for _ in range(24):          # 最多等 12 秒
+                            time.sleep(0.5)
+                            try:
+                                fr2 = (rd.cap.get(timeout=0.5)
+                                       if getattr(rd, "cap", None) else None)
+                            except Exception:
+                                fr2 = None
+                            if fr2 is not None and screen_is_gameover(fr2) is False:
+                                ok_new = True
+                                break
+                        if ok_new:
+                            log("  已点「再来一次」，新局已开始")
+                            time.sleep(0.6)
+                        else:
+                            log("  ⚠️ 点了「再来一次」但新局未出现，再试一次")
+                            click_restart(m)
+                            time.sleep(2.5)
+                        t0 = time.time()
+                        continue
+                    else:
+                        break
+
             # ★ pending 优化：上一步结束时已确认静止，直接复用其结果
             if pending is not None and not a.no_pending:
                 g, bad, wms, vms = pending, 0, 0.0, 0.0
@@ -169,8 +304,8 @@ def main():
                 _, _, (i1, j1), (i2, j2) = mv; pred = 0
             elif a.mode == "poker":
                 # ★ 牌局模式：先读手牌，据此定目标花色
-                fr = None
-                if getattr(rd, "cap", None) is not None:
+                fr = fr_iter
+                if fr is None and getattr(rd, "cap", None) is not None:
                     try:
                         fr = rd.cap.get(timeout=0.5)
                     except Exception:
