@@ -8,7 +8,9 @@
 #   ./run2.sh turbo [N]     同 play（pending 优化已内置，无需单独 turbo）
 #   ./run2.sh dry [N]       只识别不点击，打印棋盘
 #
-# ★ 2026-09-24 更新：bot 内核切到 bot_v6.py（VMouse2 常驻 + pending +
+# ★ 2026-09-24 更新：--vision mem（内存读棋盘）+ --mode auto（自动识别模式）
+#   自动识别：牌局看左侧绿色分值表；识别不了则按普通模式跑。
+# ★ bot 内核切到 bot_v6.py（VMouse2 常驻 + pending +
 #   拉黑 + 运动感知 + 抗遮挡），静止窗默认 250ms（实测分/秒 168.3 最优）。
 set -u
 export PATH=$PATH:/usr/bin:/bin
@@ -38,8 +40,8 @@ case "${1:-help}" in
       echo "游戏: $(pgrep -f 'Bejeweled3.ex[e]' >/dev/null && echo 运行中 || echo 未运行)"
       ;;
   logs)   tail -n "${2:-30}" /home/deck/bjbot/bot.log ;;
-  play)   exec python3 $BOT --engine pro --still-ms $STILL --moves "${2:-0}" ;;
-  turbo)  exec python3 $BOT --engine pro --still-ms $STILL --moves "${2:-0}" ;;
-  dry)    exec python3 $BOT --engine pro --still-ms $STILL --no-click --moves "${2:-3}" ;;
+  play)   exec python3 $BOT --engine pro --vision mem --mode auto --still-ms $STILL --moves "${2:-0}" ;;
+  turbo)  exec python3 $BOT --engine pro --vision mem --mode auto --still-ms $STILL --moves "${2:-0}" ;;
+  dry)    exec python3 $BOT --engine pro --vision mem --mode auto --still-ms $STILL --no-click --moves "${2:-3}" ;;
   *)      sed -n '2,12p' "$0" ;;
 esac

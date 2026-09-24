@@ -60,6 +60,45 @@ def cxy(i, j):
     return (int(round(BOARD["x0"] + j * BOARD["pitch_x"])),
             int(round(BOARD["y0"] + i * BOARD["pitch_y"])))
 
+def detect_mode(frame):
+    """从画面自动识别游戏模式。返回 "poker" / "normal" / None。
+
+    ★ 判据的两次迭代（2026-09-24）★
+
+    第一版：看左侧取样区是不是"绿色"（G 是最大分量）。
+      **失败** —— 那个区域的颜色受游戏背景亮度影响，
+      实测同一模式在不同背景下的 RGB 从 (61,95,31) 变到 (90,81,30)，
+      后者 G < R，判据就失效了。教训：不要用"整体色调"当判据。
+
+    第二版（当前）：数【绿色横条像素的占比】。
+      牌局模式左侧有 7 行分值表，每行是一条绿色横条 —— 这是它独有的特征。
+      实测占比：
+        牌局（游戏中）  0.348 ~ 0.461
+        禅意 / 菜单     0.000
+      差距极大，阈值取 0.2 非常安全。
+
+      判据：G 明显大于 R 和 B（绿色条），且 G 在中等亮度区间（排除高光）。
+      区域 x=250..430, y=180..460（分值表所在）。
+    """
+    if frame is None:
+        return None
+    try:
+        import numpy as np
+        f = np.asarray(frame, dtype="float32")
+        if f.shape[0] < 470 or f.shape[1] < 440:
+            return None
+        reg = f[180:460, 250:430]
+        G = reg[:, :, 1]
+        is_green = ((G > reg[:, :, 0] + 10) & (G > reg[:, :, 2] + 30)
+                    & (G > 60) & (G < 170))
+        ratio = float(is_green.mean())
+    except Exception:
+        return None
+    if ratio > 0.20:
+        return "poker"          # 有整块绿色分值表 ⇒ 牌局
+    return "normal"
+
+
 def board_alive():
     """游戏是否活着（内存判据，**不可靠，仅作参考**）。
 
@@ -164,10 +203,13 @@ def main():
                     help="游戏结束后自动点「再来一次」继续玩（牌局模式死了会用）")
     ap.add_argument("--death-shot", metavar="DIR",
                     help="检测到游戏结束时把画面连拍到 DIR（用于标定按钮位置）")
-    ap.add_argument("--mode", default="normal", choices=["normal", "poker"],
-                    help="游戏模式：normal=普通（每次消除都给分）；"
+    ap.add_argument("--mode", default="auto",
+                    choices=["auto", "normal", "poker"],
+                    help="游戏模式：auto=自动识别（默认，看左侧面板是不是绿色分值表）；"
+                         "normal=普通（每次消除都给分）；"
                          "poker=牌局（只有集齐5张牌型才给分，优先凑同花）")
     a = ap.parse_args()
+    a.mode_auto = (a.mode == "auto")     # 记下是不是自动模式（后面 a.mode 会被改写）
     cap = PwCapture()
     if not cap.start(): log("抓帧失败: %s" % cap.err); return
     # ★ 后端选择：--vision auto（默认）优先内存，不可用则自动降级到视觉。
@@ -203,9 +245,26 @@ def main():
     done = 0; ok_n = 0; dead = 0; miss = 0; t0 = time.time()
     # ★ 牌局模式：每步都要看手牌决定追哪个花色
     pk = None
+    import poker as _pk
+    pk = _pk
+    if a.mode == "auto":
+        # 先用当前画面识别一次
+        fr0 = None
+        try:
+            fr0 = cap.get(timeout=1.0)
+        except Exception:
+            fr0 = None
+        dm = detect_mode(fr0)
+        if dm:
+            a.mode = dm
+            log("  自动识别模式: %s（%s）"
+                % ("牌局" if dm == "poker" else "普通",
+                   "左侧是绿色分值表" if dm == "poker" else "左侧是紫蓝背景"))
+        else:
+            a.mode = "normal"
+            log("  ⚠️ 模式识别不了（可能还在菜单/转场），暂用普通模式，"
+                "运行中会继续识别")
     if a.mode == "poker":
-        import poker as _pk
-        pk = _pk
         log("  牌局模式：优先凑同花（同花 50000 分，是第二名的 1.67 倍）")
     rows = []; tw = 0.0; tv = 0.0; td = 0.0
     blacklist = {}
@@ -221,13 +280,18 @@ def main():
             #   （Board 指针依然有效，返回冻结的棋盘），所以 `g is None` 不成立。
             #   症状：bot 对着结算画面一直"下棋"（反复算同一招、手牌恒定不变）。
             #   判据必须用画面（结算画面是整块橙色面板）。
+            # 需要抓帧的条件：要判游戏结束、或者 auto 模式要复查模式。
+            # （后者容易漏 —— 不开 --auto-restart 时也得抓，否则复查永远拿不到帧）
             fr_iter = None
-            if a.auto_restart or a.death_shot:
+            need_frame = (a.auto_restart or a.death_shot
+                          or (a.mode_auto and done > 0 and done % 20 == 0))
+            if need_frame:
                 if getattr(rd, "cap", None) is not None:
                     try:
                         fr_iter = rd.cap.get(timeout=0.5)
                     except Exception:
                         fr_iter = None
+            if a.auto_restart or a.death_shot:
                 if screen_is_gameover(fr_iter):
                     log("  ★ 检测到游戏结束（结算画面）")
                     if a.death_shot:
@@ -258,6 +322,19 @@ def main():
                         continue
                     else:
                         break
+
+            # ★ auto 模式：运行中每 20 步复查一次（玩家可能中途换了模式）
+            if a.mode_auto and done > 0 and done % 20 == 0 and fr_iter is not None:
+                dm2 = detect_mode(fr_iter)
+                if dm2 and dm2 != a.mode:
+                    log("  ★ 模式变了：%s → %s"
+                        % ("牌局" if a.mode == "poker" else "普通",
+                           "牌局" if dm2 == "poker" else "普通"))
+                    a.mode = dm2
+                    if dm2 == "poker":
+                        log("  牌局模式：优先凑同花")
+                    dead = 0
+                    pending = None
 
             # ★ pending 优化：上一步结束时已确认静止，直接复用其结果
             if pending is not None and not a.no_pending:

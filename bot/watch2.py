@@ -9,7 +9,13 @@
 import subprocess, sys, time, signal, os
 
 GAME_PAT = "Bejeweled3.exe"
-BOT = ["/usr/bin/python3", "/home/deck/bot_v6.py", "--engine", "pro", "--still-ms", "250"]
+# ★ 2026-09-24：加 --vision mem（内存读棋盘）和 --mode auto（自动识别模式）。
+#   之前这里没传 --mode，于是守护起来的一直是普通模式 ——
+#   在牌局里跑普通逻辑会用错求解器（不凑同花），这是个真缺陷。
+#   牌局会死，所以再加 --auto-restart 自动续局。
+BOT = ["/usr/bin/python3", "/home/deck/bot_v6.py",
+       "--engine", "pro", "--vision", "mem", "--mode", "auto",
+       "--auto-restart", "--still-ms", "250"]
 POLL = 2.0
 LOG = "/home/deck/bjbot/watch.log"
 OUT = "/home/deck/bjbot/bot.out"
