@@ -1,15 +1,13 @@
-# 贡献指南
+# 参与
 
-感谢你对本项目的兴趣！
-
-## 开发环境
+## 环境
 
 ```bash
-git clone https://github.com/<你的用户名>/bejeweled3-deck-bot.git
+git clone https://github.com/FatBrother1/bejeweled3-deck-bot.git
 cd bejeweled3-deck-bot
 ```
 
-### bot 部分
+bot 部分：
 
 ```bash
 cd bot
@@ -18,32 +16,44 @@ pip install numpy evdev pillow
 ./run2.sh dry 3        # 只识别不点击，验证环境
 ```
 
-### Decky 插件部分
+插件部分：
 
 ```bash
 cd decky-plugin/BJBot
-npm install            # ⚠️ arm64 机器需把 @rollup/rollup-linux-x64-gnu 换成 arm64-gnu
+npm install            # arm64 机器要把 rollup 原生包换成 arm64-gnu
 npm run build
-node verify.mjs        # ★ 必须全过才能提交
+node verify.mjs        # 必须全过
 ```
 
-## 提交前检查
+## 提交之前
 
-1. **`node verify.mjs` 必须全过** —— 这是防止插件把 Decky 搞崩的最后一道防线
-2. 改动了 `bot/vision_np.py` 的颜色阈值 ⇒ 需重新标定并说明
-3. 改动了性能相关代码 ⇒ 需提供前后对比数据
+`node verify.mjs` 必须全过。这是防止插件把 Decky 搞崩的最后一道防线。
 
-## 关于本项目的特殊性
+改了 `bot/vision_np.py` 的颜色阈值，要重新标定并说明情况。
 
-本项目**全程由 AI 开发**。如果你也想用 AI 开发类似项目，建议注意：
+改了性能相关的代码，要给出前后的对比数据。
 
-- **所有结论必须有实测证据** —— AI 很容易"看起来合理"地推断错
-- **失败也要记录** —— 本仓库的 `docs/开发日志.md` 保留了所有事故与错误判断
-- **改动前先隔离验证** —— 尤其涉及系统级插件（本项目曾把 Decky 前端搞崩）
+## 关于 AI 开发
 
-## 报告问题
+这个项目全程由 AI 写的，模型是 deepseek-v4.1-flash。如果你也想用 AI 做类似
+的东西，有几点值得注意。
 
-请附上：
-- `./run2.sh status` 输出
-- `./run2.sh logs 30` 输出
-- 相关截图（如果涉及界面问题）
+所有结论都要有实测证据。AI 很容易给出看起来合理但实际是错的推断，
+这个项目里就吃过好几次亏。
+
+失败也要记下来。`docs/开发日志.md` 里保留了所有事故和误判，这些比成功经验
+更有用。
+
+改之前先在隔离环境验证。涉及系统级插件的时候尤其要这样，这个项目曾经把
+用户的 Decky 前端搞崩过一次。
+
+## 报问题
+
+带上这些：
+
+```
+./run2.sh status
+./run2.sh logs 30
+```
+
+如果是界面问题，加张截图。
