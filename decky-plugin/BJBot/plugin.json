@@ -1,0 +1,11 @@
+{
+  "name": "BJBot",
+  "author": "DSH",
+  "flags": [],
+  "api_version": 1,
+  "publish": {
+    "tags": ["bejeweled", "bot", "automation"],
+    "description": "Bejeweled 3 自动 bot 的游戏模式开关",
+    "image": ""
+  }
+}
