@@ -30,7 +30,7 @@
 ### Steam Deck
 
 ```bash
-git clone https://github.com/<你的用户名>/bejeweled3-deck-bot.git
+git clone https://github.com/FatBrother1/bejeweled3-deck-bot.git
 cd bejeweled3-deck-bot/bot
 bash install.sh              # 装到 $HOME
 ./run2.sh on                 # 开启（守护模式）
