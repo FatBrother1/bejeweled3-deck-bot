@@ -40,6 +40,14 @@ def game_pid():
     return None
 PID = game_pid()
 def score():
+    # ★ 优先 Board 对象链：实测三个绝对地址已失效（读到垃圾大数），
+    #   而 Board 链 [gApp+0xBE8]+0xD24 始终正确。失败才回退绝对地址。
+    try:
+        from reader_mem import board_score
+        v = board_score()
+        if v is not None: return v
+    except Exception:
+        pass
     vs = []
     for a in SCORE_ADDRS:
         d = _vmread(PID, a, 4) if PID else None
@@ -56,7 +64,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--moves", type=int, default=0)
     ap.add_argument("--engine", choices=["pro", "fast"], default="pro")
-    ap.add_argument("--vision", default="vision_np", choices=["vision_np", "vision_np2"])
+    ap.add_argument("--vision", default="auto",
+                    choices=["auto", "mem", "vision_np", "vision_np2"],
+                    help="识别后端：auto=优先内存、失效自动退视觉（默认）；"
+                         "mem=强制内存；vision_np/vision_np2=强制视觉")
     ap.add_argument("--still-ms", type=float, default=250.0)
     ap.add_argument("--out", default="")
     ap.add_argument("--max-seconds", type=float, default=0)
@@ -66,7 +77,32 @@ def main():
     a = ap.parse_args()
     cap = PwCapture()
     if not cap.start(): log("抓帧失败: %s" % cap.err); return
-    rd = FastReader(cap, backend=a.vision)
+    # ★ 后端选择：--vision auto（默认）优先内存，不可用则自动降级到视觉。
+    #   内存的偏移依赖游戏版本；游戏一更新就可能失效，必须能自己退回去。
+    use_mem = (a.vision == "mem")
+    if a.vision == "auto":
+        try:
+            from reader_mem import mem_available
+            ok, why = mem_available()
+        except Exception as e:
+            ok, why = False, "导入失败: %s" % e
+        if ok:
+            use_mem = True
+            log("  后端自动选择: 内存（%s）" % why)
+        elif "不在游戏中" in why:
+            # 停在菜单：等进游戏再定。视觉在菜单里同样读不到棋盘，
+            # 所以先挂内存，进游戏后自然可用；真不可用会走运行中降级。
+            use_mem = True
+            log("  后端选择: 内存（%s）" % why)
+        else:
+            log("  后端自动选择: 视觉（内存不可用：%s）" % why)
+    if use_mem:
+        from reader_mem import MemReader
+        rd = MemReader(still_ms=a.still_ms, cap=cap)   # 混合：像素差判静止 + 内存读棋盘
+        log("  内存后端: PID=%d gApp=0x%08X Board=0x%08X"
+            % (rd.pid, rd.gapp, rd.pr.u32(rd.gapp + 0xBE8) or 0))
+    else:
+        rd = FastReader(cap, backend=("vision_np" if a.vision in ("mem", "auto") else a.vision))
     m = VMouse2()                      # ★ 常驻（只创建一次）
     s0 = score()
     log("=== bot v6 engine=%s vision=%s still=%.0fms pid=%s 起始分=%s ===" % (
@@ -88,6 +124,20 @@ def main():
                 tw += wms; tv += vms
             if g is None:
                 miss += 1
+                # ★ 运行中降级：内存【持续】读不到才切视觉。
+                #   阈值不能太小 —— 动画中常有若干格颜色为 -1（超立方体/消除中），
+                #   短暂超过 max_bad 属正常，误降级会白白丢掉内存后端的优势。
+                #   实测教训：阈值 4 时 100 步里降级了（visions=57）。
+                if use_mem and miss >= 25:
+                    log("  ⚠️ 内存后端连续 %d 次读不到棋盘，自动降级到视觉后端" % miss)
+                    try:
+                        rd = FastReader(cap, backend="vision_np")
+                        use_mem = False
+                        pending = None
+                        miss = 0
+                        continue
+                    except Exception as e:
+                        log("  降级失败: %s" % e)
                 if miss % 5 == 0: log("  .. 读不到棋盘(bad=%d) %d" % (bad, miss))
                 if miss >= 8:
                     m.click(640, 713); time.sleep(0.6)
