@@ -259,7 +259,8 @@ def main():
             a.mode = dm
             log("  自动识别模式: %s（%s）"
                 % ("牌局" if dm == "poker" else "普通",
-                   "左侧是绿色分值表" if dm == "poker" else "左侧是紫蓝背景"))
+                   "左侧有绿色分值表" if dm == "poker"
+                   else "左侧没有分值表 ⇒ 按普通逻辑跑"))
         else:
             a.mode = "normal"
             log("  ⚠️ 模式识别不了（可能还在菜单/转场），暂用普通模式，"
