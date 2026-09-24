@@ -36,3 +36,6 @@ Thumbs.db
 # 临时
 /tmp/
 *.tar.gz
+
+# rollup 生成的 sourcemap，体积大且不影响使用
+*.js.map
