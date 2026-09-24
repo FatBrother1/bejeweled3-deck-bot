@@ -74,6 +74,9 @@ def main():
     ap.add_argument("--no-click", action="store_true", help="只识别不点击（dry）")
     ap.add_argument("--no-pending", action="store_true",
                     help="关闭 pending 优化（每步都重新等静止）")
+    ap.add_argument("--mode", default="normal", choices=["normal", "poker"],
+                    help="游戏模式：normal=普通（每次消除都给分）；"
+                         "poker=牌局（只有集齐5张牌型才给分，优先凑同花）")
     a = ap.parse_args()
     cap = PwCapture()
     if not cap.start(): log("抓帧失败: %s" % cap.err); return
@@ -108,6 +111,12 @@ def main():
     log("=== bot v6 engine=%s vision=%s still=%.0fms pid=%s 起始分=%s ===" % (
         a.engine, a.vision, a.still_ms, PID, s0))
     done = 0; ok_n = 0; dead = 0; miss = 0; t0 = time.time()
+    # ★ 牌局模式：每步都要看手牌决定追哪个花色
+    pk = None
+    if a.mode == "poker":
+        import poker as _pk
+        pk = _pk
+        log("  牌局模式：优先凑同花（同花 50000 分，是第二名的 1.67 倍）")
     rows = []; tw = 0.0; tv = 0.0; td = 0.0
     blacklist = {}
     pending = None
@@ -158,6 +167,43 @@ def main():
                 mv = solver_fast.best_move([r[:] for r in g])
                 if mv is None: dead += 1; time.sleep(0.8); continue
                 _, _, (i1, j1), (i2, j2) = mv; pred = 0
+            elif a.mode == "poker":
+                # ★ 牌局模式：先读手牌，据此定目标花色
+                fr = None
+                if getattr(rd, "cap", None) is not None:
+                    try:
+                        fr = rd.cap.get(timeout=0.5)
+                    except Exception:
+                        fr = None
+                hand = pk.read_hand(fr) if fr is not None else None
+                known = [c for c in (hand or []) if c != "?"]
+                import solver_poker
+                # ★ 骷髅机制下的纪律：能凑同花就追同花（同花永不生成骷髅），
+                #   已有 3~4 张同色更要忍住不打出低阶牌型。
+                hv = pk.hand_value(hand)
+                # 注：手牌满 5 张会自动结算，玩家只能通过"消哪种颜色"来影响牌型。
+                #     所以这里不做"忍住不打"（那是无效操作），
+                #     而是由 solver_poker 死盯目标色。
+                if not known:
+                    # 手牌全背面：没有花色信息。这时也【不能】乱打 ——
+                    # 随便凑出的低阶牌型会累积骷髅。仅在别无选择时按普通评分走。
+                    rk = solver_pro.rank_moves(g)
+                    if not rk:
+                        dead += 1
+                        if dead >= 30: break
+                        time.sleep(1.0); continue
+                    t = rk[0]; pred = t[1]; (i1, j1), (i2, j2) = t[6], t[7]
+                else:
+                    rk = solver_poker.rank_moves_poker(g, hand=hand, topk=10)
+                    if not rk:
+                        dead += 1
+                        log("  牌局无走法(%d)等洗牌..." % dead)
+                        if dead >= 30: break
+                        time.sleep(1.0); continue
+                    t = rk[0]; pred = t[1]; (i1, j1), (i2, j2) = t[5], t[6]
+                    log("  手牌 %s  目标色=%s  牌型=%s  消目标色=%d%s"
+                        % ("".join(hand), solver_poker.get_last_target(),
+                           hv[0], t[8], "  ★目标色为多数色" if len(t) > 9 and t[9] else ""))
             else:
                 rk = solver_pro.rank_moves(g)
                 if not rk:

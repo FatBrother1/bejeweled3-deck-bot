@@ -61,6 +61,8 @@ python3 calib.py
 | `run2.sh` | 控制台，开关在这儿 |
 | `bot_v6.py` | 主程序 |
 | `reader_mem.py` | 内存读取后端（地址出处见 `内存后端说明.md`）|
+| `poker.py` | 牌局模式：读手牌（看画面）+ 骷髅风险表 |
+| `solver_poker.py` | 牌局求解器：优先凑同花 |
 | `reader_fast.py` | 抓帧、静止判定、识别 |
 | `vision_np.py` | 认棋盘。颜色阈值在这儿，换画质要改 |
 | `solver_pro.py` `solver_fast.py` | 求解器 |
@@ -94,6 +96,18 @@ python3 reader_mem.py                # 自检：读一次棋盘并打印
 所以最终方案是**像素差判静止 + 内存读棋盘**。
 
 地址来源与实现细节见 [`内存后端说明.md`](内存后端说明.md)。
+
+## 游戏模式
+
+`--mode` 选游戏模式，默认 normal：
+
+```bash
+python3 bot_v6.py --mode normal   # 普通（经典/禅意/闪电等）：每次消除都给分
+python3 bot_v6.py --mode poker    # 牌局：只有集齐5张牌型才给分，优先凑同花
+```
+
+牌局模式和普通模式的规则完全不同，机制见
+[`牌局模式说明.md`](牌局模式说明.md)。
 
 ## 参数
 
