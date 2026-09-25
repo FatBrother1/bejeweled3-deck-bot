@@ -589,6 +589,12 @@ def main():
                     a.engine = "pro"
                     continue
                 mv = solver_fast.best_move([r[:] for r in g])
+                if mv is None and blacklist:
+                    # 同上：拉黑掩码掩出的假死局，用真实棋盘再算一次
+                    mv = solver_fast.best_move([r[:] for r in g_raw])
+                    if mv is not None:
+                        log("  ★ 拉黑掩码掩出了假死局 → 清空拉黑，按真实棋盘走")
+                        blacklist.clear(); g = [r[:] for r in g_raw]
                 if mv is None: dead += 1; time.sleep(0.8); continue
                 _, _, (i1, j1), (i2, j2) = mv; pred = 0
             elif a.mode == "poker":
@@ -638,6 +644,25 @@ def main():
                         % (len(tg), ", ".join("(%d,%d)+%d" % t for t in tg)))
                 rk = solver_pro.rank_moves(g, timegems=tg,
                                            banned=banned | banned_sticky)
+                # ★★ 拉黑掩码会掩出"假死局"（2026-09-26 实测）★★
+                #   被拉黑 3 次的格子会被上面改写成 '?'，而 '?' 不但自己不能连线，
+                #   还会**切断别人的连线**。钻石矿挖深以后有效走法本来就少，
+                #   几个掩码就足以把真棋盘掩成 0 候选 ⇒ bot 判定"死局"、就地待命，
+                #   看起来就是用户报的"挖到一定深度就不工作了"。
+                #   实测现场（00:54，金币 $327,000）：掩码版候选 0，真实棋盘候选 2
+                #   —— (2,3)<->(3,3)、(3,3)<->(4,3)，后者靠第 2 列 R,R,R 成三连，
+                #   正是被 (2,3)=? 切断的。
+                #   处理：0 候选且确有掩码时，用真实棋盘重算一次；有候选就说明
+                #   是掩码造成的，清空拉黑按真实棋盘走。
+                if not rk and blacklist:
+                    rk_raw = solver_pro.rank_moves(g_raw, timegems=tg,
+                                                   banned=banned | banned_sticky)
+                    if rk_raw:
+                        log("  ★ 拉黑掩码掩出了假死局 → 清空拉黑，按真实棋盘走"
+                            "（候选 %d，掩码格 %d）" % (len(rk_raw), len(blacklist)))
+                        blacklist.clear()
+                        g = [r[:] for r in g_raw]
+                        rk = rk_raw
                 if not rk:
                     dead += 1
                     fp_dead = rd.mod.fingerprint(g)
