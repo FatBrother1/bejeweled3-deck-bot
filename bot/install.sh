@@ -85,6 +85,15 @@ else
   cp board.json "$TARGET/bjbot/board.json"
   echo "   → bjbot/board.json"
 fi
+# ★ 钻石矿的棋盘格子位置和经典/禅意不一样（低约 54px），单独一份标定
+if [ -f board_diamond.json ]; then
+  if [ -f "$TARGET/bjbot/board_diamond.json" ]; then
+    echo "   → board_diamond.json 已存在，保留不覆盖"
+  else
+    cp board_diamond.json "$TARGET/bjbot/board_diamond.json"
+    echo "   → bjbot/board_diamond.json"
+  fi
+fi
 echo
 
 # ── ③ 自检 ────────────────────────────────────

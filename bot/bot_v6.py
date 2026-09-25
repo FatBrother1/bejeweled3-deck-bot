@@ -21,6 +21,40 @@ import solver_pro
 
 SCORE_ADDRS = [0x0a1de408, 0x2a542394, 0x2a5423d4]
 
+# ── 像素几何（棋盘格子画在屏幕上的哪儿）────────────────────────
+# ★ 不同游戏模式的棋盘位置不一样（2026-09-25 实测，1280x800）：
+#     经典/禅意（board.json）  x0=476.0  y0= 79.0  px=89.17  py=88.17
+#     钻石矿                   x0=469.0  y0=133.1  px=85.25  py=84.50
+#   钻石矿比经典低了约 54px、格距也小一点（矿坑上方有装饰框）。
+#   ★ 用错几何的后果（用户报的"钻石矿重复点击空转"就是这个）：
+#     拖动落到**错误的两格**上 → 游戏认为这不是合法交换 → 原样弹回 →
+#     棋盘一动不动，而 bot 还在按自己的棋盘反复算同一招、反复点。
+GEO = dict(BOARD)                  # 当前生效的几何
+GEO_DIR = "/home/deck/bjbot"
+_GEO_CACHE = {}
+STALL_LIMIT = 12                   # 连续被拒多少步就停手等一等
+STALL_WAIT = 20.0                  # 停手后最多等多少秒（秒）再试
+
+
+def geo_for(key):
+    """取某个模式的像素几何：先找 bjbot/board_<key>.json，没有就退回 board.json。"""
+    if key in _GEO_CACHE:
+        return _GEO_CACHE[key]
+    d = dict(BOARD)
+    try:
+        with open(os.path.join(GEO_DIR, "board_%s.json" % key)) as f:
+            j = json.load(f)
+        if all(k in j for k in ("x0", "y0", "pitch_x", "pitch_y")):
+            d = j
+    except Exception:
+        pass
+    _GEO_CACHE[key] = d
+    return d
+
+
+def set_geo(d):
+    GEO.clear(); GEO.update(d)
+
 libc = ctypes.CDLL("libc.so.6", use_errno=True)
 class _IOV(ctypes.Structure):
     _fields_ = [("iov_base", ctypes.c_void_p), ("iov_len", ctypes.c_size_t)]
@@ -57,8 +91,9 @@ def score():
 
 def log(m): print(time.strftime("%H:%M:%S ") + m, flush=True)
 def cxy(i, j):
-    return (int(round(BOARD["x0"] + j * BOARD["pitch_x"])),
-            int(round(BOARD["y0"] + i * BOARD["pitch_y"])))
+    """格子 (行 i, 列 j) 的屏幕中心像素 —— 用当前生效的几何 GEO。"""
+    return (int(round(GEO["x0"] + j * GEO["pitch_x"])),
+            int(round(GEO["y0"] + i * GEO["pitch_y"])))
 
 def detect_mode(frame):
     """从画面自动识别游戏模式。返回 "poker" / "normal" / None。
@@ -289,6 +324,11 @@ def main():
     end_idle_logged = False # 钻石矿结束待命提示只打一次
     was_over = False        # ★ 上一帧是否在结算画面（续局开关状态机）
     idle_logged = False     # 待命提示只打一次
+    geo_key = None          # ★ 本局用哪套像素几何（None=还没定；开局/续局时重置）
+    stall = 0               # ★ 连续被拒步数（棋盘没被我们打动）
+    stall_fp = None         # ★ 停手期间的棋盘指纹（它变了就说明游戏继续了）
+    stall_until = 0.0       # ★ 停手截止时间（到点无论如何再试一次）
+    stall_logged = False    # 停手提示只打一次
 
     CS_LIVE = "/home/deck/bjbot/cs_live"
 
@@ -369,6 +409,9 @@ def main():
                         # ★ 新棋盘 = 旧拉黑全部作废；旧 pending 是上一局的棋盘，
                         #   拿它出招必被拒（对着新棋盘出旧招 = 开局白送几步）
                         banned.clear(); banned_sticky.clear(); blacklist.clear(); pending = None
+                        # ★ 新一局重新选像素几何（模式可能换了）
+                        geo_key = None; stall = 0; stall_fp = None
+                        stall_logged = False
                         t0 = time.time()
                         continue
                 else:
@@ -381,6 +424,8 @@ def main():
                             "玩家手动开局后自动继续）")
                         # 新一局的棋盘与旧局无关，旧拉黑/pending 全部作废
                         banned.clear(); banned_sticky.clear(); blacklist.clear(); pending = None
+                        geo_key = None; stall = 0; stall_fp = None
+                        stall_logged = False
                         idle_logged = True
                     time.sleep(1.0)
                     continue
@@ -435,11 +480,25 @@ def main():
                     time.sleep(0.5); miss = 0
                 continue
             miss = 0
+            # ★ 原始棋盘留底（后面"拉黑"会把 g 里某些格子改写成 '?'，
+            #   而"这一步有没有生效"必须拿原始棋盘比 —— 否则被改写的格子会让
+            #   每一步都误判成"棋盘变了"→ 假有效 → 永不拉黑 → 反复点同一招）
+            g_raw = [r[:] for r in g]
             # ★ 钻石矿识别（2026-09-25）：泥土格读作 'D'，从无到有时打一行
             nd = sum(row.count("D") for row in g)
             if nd and not prev_nd:
                 log("  ★ 钻石矿：泥土 %d 格（不可消不可换；消旁边的宝石自动挖开）" % nd)
             prev_nd = nd
+            # ★★ 像素几何按模式选（本局第一次读盘时定，局内不再变）★★
+            #   有泥土 ⇒ 钻石矿 ⇒ 用 board_diamond.json 那套格子位置。
+            if geo_key is None:
+                geo_key = "diamond" if nd > 0 else "classic"
+                _g = geo_for(geo_key)
+                set_geo(_g)
+                log("  像素几何: %s  x0=%.0f y0=%.0f px=%.2f py=%.2f%s"
+                    % (geo_key, _g["x0"], _g["y0"], _g["pitch_x"], _g["pitch_y"],
+                       "  ← 钻石矿格子比经典低约 54px，用错会点错格"
+                       if geo_key == "diamond" else ""))
             # ★ 钻石矿计时结束检测（每局 1:30）：结束画面不是标准橙色结算
             #   面板，像素判不出 —— 但游戏时钟会停。判据：有泥 + cs>0（本局
             #   确实开始过）+ 时钟冻结满 8 次采样（约 20 秒；对局中时钟从不
@@ -487,13 +546,39 @@ def main():
                         time.sleep(1.0)
                         banned.clear(); banned_sticky.clear()
                         blacklist.clear(); pending = None
+                        geo_key = None; stall = 0; stall_fp = None
+                        stall_logged = False
                         continue
                     elif not end_idle_logged:
                         log("  ■ 本局结束：自动续局=关 → 待命中（不点击）")
                         banned.clear(); banned_sticky.clear()
                         blacklist.clear(); pending = None
+                        geo_key = None; stall = 0; stall_fp = None
+                        stall_logged = False
                         end_idle_logged = True
                         dead = 0
+            # ★★ 连续被拒保护（2026-09-25）★★
+            #   交换连续多次没被游戏接受（棋盘纹丝不动）时不再盲目出手 ——
+            #   否则几何不对 / 游戏在转场 / 有弹窗时会一直点同一个地方，
+            #   看起来就是用户报的"重复点击空转"。停手等一等，棋盘自己变了
+            #   或超时后再试。
+            if stall >= STALL_LIMIT:
+                fp_now = rd.mod.fingerprint(g_raw)
+                if stall_fp is None:
+                    stall_fp = fp_now
+                    stall_until = time.time() + STALL_WAIT
+                if fp_now != stall_fp or time.time() > stall_until:
+                    log("  ✓ 恢复出手（%s）"
+                        % ("棋盘已变化" if fp_now != stall_fp else "停手超时"))
+                    stall = 0; stall_fp = None; stall_logged = False
+                else:
+                    if not stall_logged:
+                        log("  ■ 连续 %d 步交换没被游戏接受 → 停手等待（最多 %d 秒）"
+                            % (stall, int(STALL_WAIT)))
+                        stall_logged = True
+                    pending = None
+                    time.sleep(1.0)
+                    continue
             for (i, j), n in list(blacklist.items()):
                 if n >= 3: g[i][j] = "?"
             if a.engine == "fast":
@@ -579,7 +664,11 @@ def main():
                 if tgset and ((i1, j1) in tgset or (i2, j2) in tgset):
                     log("  ★ 这一步直接拿时间宝石")
             dead = 0
-            f0 = rd.mod.fingerprint(g)
+            # ★ f0 必须取【原始棋盘】的指纹（g 已被上面的拉黑改写成 '?'）——
+            #   2026-09-25 实测的坑：只要有格子被拉黑成 '?'，f0 就永远和
+            #   下一帧的真实棋盘不同 ⇒ 每一步都判"棋盘变了"⇒ 假有效 ⇒
+            #   拉黑被清 ⇒ 同一招无限重试（钻石矿里就这么空转了 35 步）。
+            f0 = rd.mod.fingerprint(g_raw)
             sb = score()
             ts = time.perf_counter()
             if a.no_click:
@@ -598,6 +687,14 @@ def main():
             tw += w2; tv += v2
             sa = score()
             changed = (g2 is not None and rd.mod.fingerprint(g2) != f0)
+            # ★★ "这次交换真的被游戏接受了没有" ★★
+            #   只看我们拖的那两格：被拒的交换一定让这两格原样不动。
+            #   棋盘可能因为别的原因变化（泥土状态抖动、洗牌、动画），
+            #   只看整体指纹会被这些无关变化骗过去（2026-09-25 实测：
+            #   几何不对时拖动落在别的格上，棋盘纹丝不动，却被判成有效）。
+            swapped = bool(g2 is not None and
+                           (g2[i1][j1] != g_raw[i1][j1] or
+                            g2[i2][j2] != g_raw[i2][j2]))
             lvl = (sb is not None and sa is not None and sa < sb)
             real = (sa - sb) if (sb is not None and sa is not None and not lvl) else None
             # ★ 判"有效"要收紧：changed=True 但 real==0 是读数被动画污染的假阳性
@@ -608,13 +705,17 @@ def main():
             #   （2208 次实际=0）。分数读不到就当被拒，宁可保守。
             # ★ 钻石矿（用户纠偏）：目标是挖泥往下走，非挖泥配对游戏也接受
             #   （棋盘会动、会刷新挖泥机会）—— 分数不动不算失败。
-            #   有泥时：棋盘变了就是有效；其它模式仍按分数判。
+            #   ★ 2026-09-25 再收紧：钻石矿的分数在内存里读不到（实测画面
+            #   $48,000 而 Board+0xD24 读 0），所以只能靠"棋盘变了"判；
+            #   但必须再叠一条 swapped（我们拖的那两格确实变了），
+            #   否则无关变化会把被拒的招洗白。
             if nd > 0:
-                effective = changed
+                effective = bool(changed and swapped)
             else:
                 effective = (real is not None and real != 0)
             if effective:
                 ok_n += 1
+                stall = 0; stall_fp = None; stall_logged = False
                 blacklist.pop((i1, j1), None); blacklist.pop((i2, j2), None)
                 # ★ 棋盘变了：之前被拒的招现在可能有效，全部解禁
                 banned.clear()
@@ -625,6 +726,7 @@ def main():
                         and not any(c == "?" for row in g2 for c in row)):
                     pending = g2
             else:
+                stall += 1
                 blacklist[(i1, j1)] = blacklist.get((i1, j1), 0) + 1
                 blacklist[(i2, j2)] = blacklist.get((i2, j2), 0) + 1
                 # ★ 走法级拉黑（阈值 1）：棋盘没变时同一招必再被拒，
@@ -638,7 +740,8 @@ def main():
                     banned_sticky.add(mv)
             el = time.time() - t0
             rows.append({"n": done, "pred": pred, "real": real, "chg": bool(changed),
-                         "eff": bool(effective), "drag_ms": round(dms, 1),
+                         "swp": swapped, "eff": bool(effective),
+                         "drag_ms": round(dms, 1),
                          "wait_ms": round(wms + w2, 1), "vision_ms": round(vms + v2, 1),
                          "pend": used_pending})
             log("  #%-3d %s<->%s 预测=%-5d 实际=%-6s %s [%.2f步/秒]" % (
