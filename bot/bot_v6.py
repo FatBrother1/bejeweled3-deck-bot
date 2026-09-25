@@ -642,8 +642,17 @@ def main():
                 if tg:
                     log("  ⏱ 时间宝石 %d 个: %s"
                         % (len(tg), ", ".join("(%d,%d)+%d" % t for t in tg)))
+                # ★ 特殊宝石状态位（2026-09-26 新增）：火焰1 超立方2 闪电4 超新星5。
+                #   数据本来就在每次读盘的 extra["flags"] 里，白拿 —— 交给求解器
+                #   模拟它们的引爆范围（火焰 3×3、闪电整行整列、超新星叠加、链式引爆）。
+                #   实测：70% 的帧盘面上有特殊宝石，接进去以后 1/3 的帧首选招会变，
+                #   且都是变成"引爆特殊宝石"那一步。
+                fl = {(i, j): f for (i, j, f) in
+                      ((rd.last_extra or {}).get("flags") or [])
+                      if f in (1, 2, 4, 5)}
                 rk = solver_pro.rank_moves(g, timegems=tg,
-                                           banned=banned | banned_sticky)
+                                           banned=banned | banned_sticky,
+                                           flags=fl)
                 # ★★ 拉黑掩码会掩出"假死局"（2026-09-26 实测）★★
                 #   被拉黑 3 次的格子会被上面改写成 '?'，而 '?' 不但自己不能连线，
                 #   还会**切断别人的连线**。钻石矿挖深以后有效走法本来就少，
@@ -656,13 +665,27 @@ def main():
                 #   是掩码造成的，清空拉黑按真实棋盘走。
                 if not rk and blacklist:
                     rk_raw = solver_pro.rank_moves(g_raw, timegems=tg,
-                                                   banned=banned | banned_sticky)
+                                                   banned=banned | banned_sticky,
+                                                   flags=fl)
                     if rk_raw:
                         log("  ★ 拉黑掩码掩出了假死局 → 清空拉黑，按真实棋盘走"
                             "（候选 %d，掩码格 %d）" % (len(rk_raw), len(blacklist)))
                         blacklist.clear()
                         g = [r[:] for r in g_raw]
                         rk = rk_raw
+                # ★★ 最后一道兜底：连"走法级拉黑"也不带，纯问一句"这盘还有没有合法交换"
+                #   （2026-09-26，通用三消文档 §5.1 的 hasAnyMove 思路）。
+                #   被游戏拒过的招会被 banned 挡掉；若所有合法招恰好都被挡掉，
+                #   上面两步都救不回来，仍会假死局。解禁重试有 stall 保护兜着
+                #   （连续被拒会自动停手等待），所以不会退化成"重复点击空转"。
+                if not rk and (banned or banned_sticky):
+                    rk_free = solver_pro.rank_moves(g, timegems=tg, banned=set(),
+                                                    flags=fl)
+                    if rk_free:
+                        log("  ★ 合法走法全被拉黑 → 解禁重算（候选 %d，原 ban %d 条）"
+                            % (len(rk_free), len(banned) + len(banned_sticky)))
+                        banned.clear(); banned_sticky.clear()
+                        rk = rk_free
                 if not rk:
                     dead += 1
                     fp_dead = rd.mod.fingerprint(g)

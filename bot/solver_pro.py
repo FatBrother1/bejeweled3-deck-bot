@@ -58,12 +58,73 @@ def collapse(g):
             new[i][j] = col[i - (8 - k)]
     return new, n_unk
 
-def simulate(g, i, j, i2, j2, max_cascade=12, stop_on_unknown=True):
+def collapse_f(g, fl):
+    """和 collapse 一样，但让 flags 跟着宝石一起下落（顶部补的 '?' 没有 flags）。
+
+    ★ 为什么必须带着 flags 下落：火焰/闪电宝石掉到新位置后效果还在。
+      不带的话，级联到第二层就会拿"旧位置的状态位"去判引爆范围，纯属乱算。
+    """
+    new = [["?"] * 8 for _ in range(8)]
+    nfl = {}
+    for j in range(8):
+        col = [(g[i][j], fl.get((i, j), 0)) for i in range(8) if g[i][j] is not None]
+        k = len(col)
+        for i in range(8 - k, 8):
+            g_, f_ = col[i - (8 - k)]
+            new[i][j] = g_
+            if f_:
+                nfl[(i, j)] = f_
+    return new, nfl
+
+def expand_specials(hit, fl):
+    """把"本轮被消掉的格子"按特殊宝石的效果展开（2026-09-26 新增）。
+
+    规则（Bejeweled 3；状态位见 reader_mem：火焰1 超立方2 闪电4 超新星5）：
+      火焰(1)   → 炸自己周围 3×3
+      闪电(4)   → 清掉自己所在的整行 + 整列
+      超新星(5) → 1|4，两者叠加
+    被炸到的格子里若还有特殊宝石，继续引爆（链式），最多 64 格必收敛。
+
+    ★ 超立方(2) 被炸到时游戏里怎么算我没实测过 —— 保守当普通宝石，不展开、不猜。
+    """
+    if not fl:
+        return set(hit)
+    out = set(hit)
+    while True:
+        add = set()
+        for (a, b) in out:
+            f = fl.get((a, b), 0)
+            if f & 1:
+                for da in (-1, 0, 1):
+                    for db in (-1, 0, 1):
+                        x, y = a + da, b + db
+                        if 0 <= x < 8 and 0 <= y < 8:
+                            add.add((x, y))
+            if f & 4:
+                for x in range(8):
+                    add.add((x, b))
+                    add.add((a, x))
+        new = add - out
+        if not new:
+            return out
+        out |= new
+
+def simulate(g, i, j, i2, j2, max_cascade=12, stop_on_unknown=True, flags=None):
     """模拟一次交换的完整级联。
-       ★ 支持超立方体：若交换的一方是 'S'，则消除另一方颜色的全部宝石。"""
+       ★ 支持超立方体：若交换的一方是 'S'，则消除另一方颜色的全部宝石。
+       ★ flags（2026-09-26 新增）：{(行,列): 状态位}，来自 reader_mem 的
+         extra["flags"]。给了就模拟火焰/闪电/超新星的引爆范围；不给（None/空）
+         则行为与从前逐字节一致 —— 这是可回滚、可 A/B 的前提。"""
     grid = [row[:] for row in g]
+    fl = dict(flags) if flags else None
     a0, b0 = grid[i][j], grid[i2][j2]
     grid[i][j], grid[i2][j2] = b0, a0
+    if fl is not None:
+        # 状态位跟着交换走
+        fa, fb = fl.get((i, j), 0), fl.get((i2, j2), 0)
+        fl.pop((i, j), None); fl.pop((i2, j2), None)
+        if fa: fl[(i2, j2)] = fa
+        if fb: fl[(i, j)] = fb
     total = 0; casc = 0; specials = 0
     first_cells = []; first_runs = []
     final = grid
@@ -81,8 +142,13 @@ def simulate(g, i, j, i2, j2, max_cascade=12, stop_on_unknown=True):
                 specials += 3
                 first_cells = cells
                 first_runs = [len(cells)]
-                for a, b in cells: grid[a][b] = None
-                grid, _ = collapse(grid)
+                for a, b in cells:
+                    grid[a][b] = None
+                    if fl is not None: fl.pop((a, b), None)
+                if fl is not None:
+                    grid, fl = collapse_f(grid, fl)
+                else:
+                    grid, _ = collapse(grid)
                 final = grid
     while casc < max_cascade:
         hit, runs = find_matches(grid)
@@ -96,11 +162,23 @@ def simulate(g, i, j, i2, j2, max_cascade=12, stop_on_unknown=True):
             if n == 4: specials += 1
             elif n >= 5: specials += 3
         total += step * casc
+        # ★ 特殊宝石展开：火焰炸 3×3、闪电清整行整列、超新星叠加、链式引爆
+        blast = expand_specials(hit, fl) if fl is not None else hit
         if not first_cells:
-            first_cells = [c for cells, _ in runs for c in cells]
+            base = [c for cells, _ in runs for c in cells]
+            if fl is not None:
+                seen = set(base)
+                first_cells = base + [c for c in sorted(blast) if c not in seen]
+            else:
+                first_cells = base
             first_runs = [n for _, n in runs]
-        for a, b in hit: grid[a][b] = None
-        grid, _ = collapse(grid)
+        for a, b in blast:
+            grid[a][b] = None
+            if fl is not None: fl.pop((a, b), None)
+        if fl is not None:
+            grid, fl = collapse_f(grid, fl)
+        else:
+            grid, _ = collapse(grid)
         final = grid
     return total, casc, first_cells, first_runs, specials, final
 
@@ -120,7 +198,7 @@ def potential(g):
     return n
 
 def rank_moves(g, w_special=8.0, w_row=2.0, w_pot=2.0, topk=0, timegems=None,
-               banned=None):
+               banned=None, flags=None):
     """给所有走法打分。
 
     timegems: [(行, 列, 计数), ...] —— 闪电模式的时间宝石位置。
@@ -150,7 +228,8 @@ def rank_moves(g, w_special=8.0, w_row=2.0, w_pot=2.0, topk=0, timegems=None,
                 # 'D'=钻石矿泥土：游戏不允许交换泥块，直接跳过
                 if a in ("?", "D", None) or b in ("?", "D", None): continue
                 if a == b: continue
-                total, casc, cells, runs, spec, fg = simulate(g, i, j, i2, j2)
+                total, casc, cells, runs, spec, fg = simulate(g, i, j, i2, j2,
+                                                             flags=flags)
                 if total <= 0: continue
                 cleared = len(set(cells))
                 avg_row = (sum(r for r, _ in cells) / len(cells)) if cells else 0.0
