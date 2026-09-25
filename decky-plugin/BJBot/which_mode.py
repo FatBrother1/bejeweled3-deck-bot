@@ -77,6 +77,19 @@ def _read_mem_b0():
         return None
 
 
+def _read_board_diamond():
+    try:
+        sys.path.insert(0, "/home/deck")
+        import reader_mem as R
+        r = R.MemReader()
+        g, bad, extra = r._read_grid()
+        if g:
+            return sum(row.count("D") for row in g) >= 4
+    except Exception:
+        pass
+    return False
+
+
 def _fingerprint(frame):
     f = np.asarray(frame, dtype="float32")
     if f.ndim != 3 or f.shape[2] < 3:
@@ -137,6 +150,10 @@ def detect(frame=None, refs=None):
     if b0 is not None and b0 in MEM_MAP:
         k = MEM_MAP[b0]
         return k, NAMES.get(k, k), None, "mem"
+
+    # ①b 棋盘泥格：钻石矿最可靠信号
+    if _read_board_diamond():
+        return "diamond", NAMES["diamond"], None, "memboard"
 
     # ② 图像
     if frame is None:

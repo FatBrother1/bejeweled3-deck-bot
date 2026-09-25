@@ -606,7 +606,13 @@ def main():
             #   ★ 2026-09-25 再收紧：real=None（分数读不到/局间重置）也不能算
             #   有效 —— 钻石矿实测 None+指纹微变 让两个废招每 0.5 秒无限交替
             #   （2208 次实际=0）。分数读不到就当被拒，宁可保守。
-            effective = (real is not None and real != 0)
+            # ★ 钻石矿（用户纠偏）：目标是挖泥往下走，非挖泥配对游戏也接受
+            #   （棋盘会动、会刷新挖泥机会）—— 分数不动不算失败。
+            #   有泥时：棋盘变了就是有效；其它模式仍按分数判。
+            if nd > 0:
+                effective = changed
+            else:
+                effective = (real is not None and real != 0)
             if effective:
                 ok_n += 1
                 blacklist.pop((i1, j1), None); blacklist.pop((i2, j2), None)
