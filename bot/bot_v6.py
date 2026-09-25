@@ -277,7 +277,10 @@ def main():
         log("  牌局模式：优先凑同花（同花 50000 分，是第二名的 1.67 倍）")
     rows = []; tw = 0.0; tv = 0.0; td = 0.0
     blacklist = {}
+    banned = set()          # ★ 走法级拉黑：被拒的招在棋盘变化前绝不再出
     pending = None
+    was_over = False        # ★ 上一帧是否在结算画面（续局开关状态机）
+    idle_logged = False     # 待命提示只打一次
     try:
         while True:
             if a.moves and done >= a.moves: break
@@ -308,6 +311,7 @@ def main():
                     except Exception:
                         fr_iter = None
             if screen_is_gameover(fr_iter):
+                was_over = True
                 if a.auto_restart or a.death_shot:
                     log("  ★ 检测到游戏结束（结算画面）")
                     if a.death_shot:
@@ -334,13 +338,27 @@ def main():
                             log("  ⚠️ 点了「再来一次」但新局未出现，再试一次")
                             click_restart(m)
                             time.sleep(2.5)
+                        # ★ 新棋盘 = 旧拉黑全部作废；旧 pending 是上一局的棋盘，
+                        #   拿它出招必被拒（对着新棋盘出旧招 = 开局白送几步）
+                        banned.clear(); blacklist.clear(); pending = None
                         t0 = time.time()
                         continue
                 else:
-                    # 没开 --auto-restart：不该继续对着结算画面空转。
-                    # 之前这里会一路跑到步数上限，白烧几十步。
-                    log("  ■ 游戏已结束，停止（要自动续局请加 --auto-restart）")
-                    break
+                    # ★ 续局开关=关：当局结束【不做任何操作】—— 不点击、不退出。
+                    #   待命在结算画面；玩家自己点「再来一次」/开新局后自动继续。
+                    #   （开/关由 --auto-restart 参数决定；run2.sh 里是
+                    #     AUTORESTART=1/0 变量。旧版这里是直接 break 停机。）
+                    if not idle_logged:
+                        log("  ■ 当局结束：自动续局=关 → 待命中（不点击；"
+                            "玩家手动开局后自动继续）")
+                        # 新一局的棋盘与旧局无关，旧拉黑/pending 全部作废
+                        banned.clear(); blacklist.clear(); pending = None
+                        idle_logged = True
+                    time.sleep(1.0)
+                    continue
+            else:
+                was_over = False
+                idle_logged = False
 
             # ★ auto 模式：运行中每 20 步复查一次（玩家可能中途换了模式）
             if a.mode_auto and done > 0 and done % 20 == 0 and fr_iter is not None:
@@ -354,14 +372,17 @@ def main():
                         log("  牌局模式：优先凑同花")
                     dead = 0
                     pending = None
+                    banned.clear(); blacklist.clear()
 
             # ★ pending 优化：上一步结束时已确认静止，直接复用其结果
             if pending is not None and not a.no_pending:
                 g, bad, wms, vms = pending, 0, 0.0, 0.0
+                used_pending = True
                 pending = None
             else:
                 g, bad, wms, vms = rd.wait_still_and_read(min_still_ms=a.still_ms)
                 tw += wms; tv += vms
+                used_pending = False
             if g is None:
                 miss += 1
                 # ★ 运行中降级：内存【持续】读不到才切视觉。
@@ -418,7 +439,7 @@ def main():
                 if not known:
                     # 手牌全背面：没有花色信息。这时也【不能】乱打 ——
                     # 随便凑出的低阶牌型会累积骷髅。仅在别无选择时按普通评分走。
-                    rk = solver_pro.rank_moves(g)
+                    rk = solver_pro.rank_moves(g, banned=banned)
                     if not rk:
                         dead += 1
                         if dead >= 30: break
@@ -443,13 +464,21 @@ def main():
                 if tg:
                     log("  ⏱ 时间宝石 %d 个: %s"
                         % (len(tg), ", ".join("(%d,%d)+%d" % t for t in tg)))
-                rk = solver_pro.rank_moves(g, timegems=tg)
+                rk = solver_pro.rank_moves(g, timegems=tg, banned=banned)
                 if not rk:
                     dead += 1
+                    if dead <= 2:
+                        # ★ 死局现场诊断：棋盘明明读得到却没有候选 —— 打印看看
+                        log("  死局现场 bad=%s banned=%d 棋盘:" % (bad, len(banned)))
+                        for row in g:
+                            log("    " + " ".join(row))
                     log("  死局(%d)等洗牌..." % dead)
                     if dead >= 30: break
                     time.sleep(1.0); continue
                 t = rk[0]; pred = t[1]; (i1, j1), (i2, j2) = t[6], t[7]
+                tgset = set((i, j) for i, j, _ in tg)
+                if tgset and ((i1, j1) in tgset or (i2, j2) in tgset):
+                    log("  ★ 这一步直接拿时间宝石")
             dead = 0
             f0 = rd.mod.fingerprint(g)
             sb = score()
@@ -467,20 +496,29 @@ def main():
             changed = (g2 is not None and rd.mod.fingerprint(g2) != f0)
             lvl = (sb is not None and sa is not None and sa < sb)
             real = (sa - sb) if (sb is not None and sa is not None and not lvl) else None
-            effective = changed or (real is not None and real > 0)
+            # ★ 判"有效"要收紧：changed=True 但 real==0 是读数被动画污染的假阳性
+            #   （有效交换必得分）。旧判据把这种假阳性当有效 → 清空拉黑 →
+            #   同一招被无限重选（"反复算同一招、分数不涨"的根源之一）。
+            effective = ((changed and real != 0) or (real is not None and real > 0))
             if effective:
                 ok_n += 1
                 blacklist.pop((i1, j1), None); blacklist.pop((i2, j2), None)
+                # ★ 棋盘变了：之前被拒的招现在可能有效，全部解禁
+                banned.clear()
                 # ★ 复用本次的静止结果，下一步跳过"等静止"
                 if g2 is not None and not a.no_pending:
                     pending = g2
             else:
                 blacklist[(i1, j1)] = blacklist.get((i1, j1), 0) + 1
                 blacklist[(i2, j2)] = blacklist.get((i2, j2), 0) + 1
+                # ★ 走法级拉黑（阈值 1）：棋盘没变时同一招必再被拒，
+                #   不 ban 就会连续重复同一招。棋盘一变即全部解禁。
+                banned.add(frozenset(((i1, j1), (i2, j2))))
             el = time.time() - t0
             rows.append({"n": done, "pred": pred, "real": real, "chg": bool(changed),
                          "eff": bool(effective), "drag_ms": round(dms, 1),
-                         "wait_ms": round(wms + w2, 1), "vision_ms": round(vms + v2, 1)})
+                         "wait_ms": round(wms + w2, 1), "vision_ms": round(vms + v2, 1),
+                         "pend": used_pending})
             log("  #%-3d %s<->%s 预测=%-5d 实际=%-6s %s [%.2f步/秒]" % (
                 done, (i1, j1), (i2, j2), pred,
                 ("%d" % real) if real is not None else ("过关" if lvl else "?"),

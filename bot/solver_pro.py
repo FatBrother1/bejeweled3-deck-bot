@@ -118,21 +118,28 @@ def potential(g):
             if ok(a) and a == c and b != a: n += 1
     return n
 
-def rank_moves(g, w_special=8.0, w_row=2.0, w_pot=2.0, topk=0, timegems=None):
+def rank_moves(g, w_special=8.0, w_row=2.0, w_pot=2.0, topk=0, timegems=None,
+               banned=None):
     """给所有走法打分。
 
     timegems: [(行, 列, 计数), ...] —— 闪电模式的时间宝石位置。
       ★ 有它时必须优先去消：闪电模式是限时的，不拿时间宝石就等着时间耗尽。
         实测（2026-09-25）时间宝石的标记是 flags & 131072、计数在 +0x244。
         没有这个参数时行为与从前完全一致（不影响其它模式）。
+    banned: set(frozenset({(i1,j1),(i2,j2)})) —— 已被游戏拒绝过的走法。
+      ★ 棋盘没变时被拒的招必然再被拒（求解是确定性的），直接跳过，
+        否则 bot 会反复出同一招（实测 #145~#149 连续 5 步同一招全被拒）。
+        棋盘一变（任何有效步）由 bot 负责清空。
     """
     tg = set((i, j) for i, j, _ in (timegems or []))
+    ban = banned or set()
     out = []
     for i in range(8):
         for j in range(8):
             for di, dj in ((0, 1), (1, 0)):
                 i2, j2 = i + di, j + dj
                 if i2 > 7 or j2 > 7: continue
+                if frozenset(((i, j), (i2, j2))) in ban: continue
                 a, b = g[i][j], g[i2][j2]
                 if a in ("?", None) or b in ("?", None): continue
                 if a == b: continue

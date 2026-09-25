@@ -19,14 +19,22 @@ export DBUS_SESSION_BUS_ADDRESS=${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/user/
 cd /home/deck
 BOT=/home/deck/bot_v6.py
 STILL=250
+# ★★ 续局开关（2026-09-25）：当局结束后是否自动点「再来一次」
+#   1 = 自动点（原守护默认行为）
+#   0 = 不做任何操作 —— bot 待命在结算画面，玩家手动开局后自动继续
+#   单次覆盖：AUTORESTART=0 ./run2.sh turbo    ；改默认值就直接改下面这行
+AUTORESTART=${AUTORESTART:-1}
+RSFLAG=""
+[ "$AUTORESTART" = "1" ] && RSFLAG="--auto-restart"
 case "${1:-help}" in
   on)
       systemctl --user stop bejewel-watch 2>/dev/null
       pkill -f "python3 /home/deck/bo[t]_" 2>/dev/null
       sleep 1
       systemd-run --user --unit=bejewel-watch --collect \
+        --setenv=AUTORESTART=$AUTORESTART \
         /usr/bin/python3 /home/deck/watch2.py
-      echo "守护已启动（临时单元，重启后失效）"
+      echo "守护已启动（临时单元，重启后失效）续局=$([ "$AUTORESTART" = 1 ] && echo 自动点 || echo 待命)"
       ;;
   off)
       systemctl --user stop bejewel-watch 2>/dev/null
@@ -38,10 +46,11 @@ case "${1:-help}" in
       echo "守护: $(systemctl --user is-active bejewel-watch 2>/dev/null)"
       echo "bot : $(pgrep -f 'python3 /home/deck/bo[t]_' >/dev/null && echo 运行中 || echo 未运行)"
       echo "游戏: $(pgrep -f 'Bejeweled3.ex[e]' >/dev/null && echo 运行中 || echo 未运行)"
+      echo "续局: AUTORESTART=$AUTORESTART ($([ "$AUTORESTART" = 1 ] && echo 当局结束自动点再来一次 || echo 当局结束待命不操作))"
       ;;
   logs)   tail -n "${2:-30}" /home/deck/bjbot/bot.out ;;
-  play)   exec python3 $BOT --engine pro --vision mem --mode auto --still-ms $STILL --moves "${2:-0}" ;;
-  turbo)  exec python3 $BOT --engine pro --vision mem --mode auto --still-ms $STILL --moves "${2:-0}" ;;
+  play)   exec python3 $BOT --engine pro --vision mem --mode auto --still-ms $STILL $RSFLAG --moves "${2:-0}" ;;
+  turbo)  exec python3 $BOT --engine pro --vision mem --mode auto --still-ms $STILL $RSFLAG --moves "${2:-0}" ;;
   dry)    exec python3 $BOT --engine pro --vision mem --mode auto --still-ms $STILL --no-click --moves "${2:-3}" ;;
   *)      sed -n '2,12p' "$0" ;;
 esac

@@ -13,9 +13,12 @@ GAME_PAT = "Bejeweled3.exe"
 #   之前这里没传 --mode，于是守护起来的一直是普通模式 ——
 #   在牌局里跑普通逻辑会用错求解器（不凑同花），这是个真缺陷。
 #   牌局会死，所以再加 --auto-restart 自动续局。
+# ★ 2026-09-25：续局改为开关 —— 环境变量 AUTORESTART（run2.sh on 会传进来）：
+#   1 = 当局结束自动点「再来一次」；0 = 当局结束不操作（bot 待命，手动开局自动继续）
+AUTORESTART = os.environ.get("AUTORESTART", "1") == "1"
 BOT = ["/usr/bin/python3", "/home/deck/bot_v6.py",
        "--engine", "pro", "--vision", "mem", "--mode", "auto",
-       "--auto-restart", "--still-ms", "250"]
+       "--still-ms", "250"] + (["--auto-restart"] if AUTORESTART else [])
 POLL = 2.0
 LOG = "/home/deck/bjbot/watch.log"
 OUT = "/home/deck/bjbot/bot.out"
@@ -32,7 +35,8 @@ def game_running():
                           capture_output=True).returncode == 0
 
 def main():
-    log("=== watcher start (poll %.1fs) ===" % POLL)
+    log("=== watcher start (poll %.1fs) 续局=%s ==="
+        % (POLL, "自动点再来一次" if AUTORESTART else "待命不操作"))
     proc = None
     while True:
         alive = game_running()

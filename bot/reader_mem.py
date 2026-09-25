@@ -442,7 +442,8 @@ class MemReader:
     def read_now(self):
         """立即读一次（不等稳定）。返回 (grid|None, bad)"""
         t0 = time.perf_counter()
-        g, bad, _ = self._read_grid()
+        g, bad, extra = self._read_grid()
+        self.last_extra = extra or {}
         self.stats["t_vision"] += time.perf_counter() - t0
         self.stats["visions"] += 1
         self.stats["reads"] += 1
@@ -486,6 +487,9 @@ class MemReader:
         while time.time() - t0 < max_wait:
             tick = time.time()
             g, bad, extra = self._read_grid()
+            # ★ 2026-09-25 修复：本方法（生效的最后一个同名定义）此前从不写
+            #   last_extra ⇒ bot 永远拿不到 timegems，加分宝石优先完全失效。
+            self.last_extra = extra or {}
             self.stats["reads"] += 1
             if g is None:
                 time.sleep(POLL)
