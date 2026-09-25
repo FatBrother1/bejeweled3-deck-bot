@@ -301,7 +301,12 @@ class MemReader:
     # ── 接口兼容 ────────────────────────────────────────────
     @staticmethod
     def fingerprint(g):
-        return tuple("".join(r) for r in g)
+        # ★ 泥土 'D' 与未知 '?' 归一化：泥块状态位会抖动（0x0↔0x10000），
+        #   消除瞬间无色格也会在 ?/D 间闪 —— 若不归一，冻结的棋盘每次
+        #   读数指纹都不同，bot 误判"棋盘变了"→ 不拉黑 → 两个废招无限
+        #   交替（2026-09-25 钻石矿实测 2208 次实际=0）。
+        return tuple("".join("_" if c in ("?", "D") else c for c in r)
+                     for r in g)
 
     @staticmethod
     def is_board_like(conf, max_bad=MAX_BAD):
@@ -459,6 +464,18 @@ class MemReader:
         if g is None or bad > MAX_BAD:
             return None, bad
         return g, bad
+
+    def cs_now(self):
+        """Board+0x38 游戏时钟（厘秒）。在走=对局中；冻结=菜单/结算/暂停。
+        ★ 钻石矿等模式的结束画面不是标准橙色结算面板，像素判不出来，
+          用「之前在走、现在停了」判本局结束（2026-09-25）。"""
+        b = (self.last_extra or {}).get("board")
+        if not b:
+            return None
+        try:
+            return self.pr.i32(b + 0x38)
+        except Exception:
+            return None
 
     def wait_still_and_read(self, thr=None, need=None, max_wait=4.0,
                             min_still_ms=None, require_motion=False,

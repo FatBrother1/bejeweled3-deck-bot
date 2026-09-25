@@ -282,8 +282,32 @@ def main():
     pending = None
     prev_fp = None          # ★ 死局时检测洗牌用
     prev_nd = 0             # ★ 钻石矿泥土格数（变化沿触发日志）
+    cs_prev = None          # ★ 游戏时钟采样（钻石矿结束检测用）
+    cs_frozen = 0           # ★ 时钟连续冻结采样数
+    cs_live_marked = False  # ★ 本进程已写过活跃标记
+    cs_moved = False        # ★（已废弃，留位免得别处引用炸）
+    end_idle_logged = False # 钻石矿结束待命提示只打一次
     was_over = False        # ★ 上一帧是否在结算画面（续局开关状态机）
     idle_logged = False     # 待命提示只打一次
+
+    CS_LIVE = "/home/deck/bjbot/cs_live"
+
+    def marker_live():
+        """对局活跃标记（10 分钟窗口）：cs 曾在走时写入，消费后清除。
+        跨进程记住「刚才真的在对局中」—— 守护重启不丢，菜单不误点。"""
+        try:
+            with open(CS_LIVE) as f:
+                return (time.time() - int(f.read().strip())) < 600
+        except Exception:
+            return False
+
+    def replay_switch(default):
+        """续局开关：读插件面板写的标记文件（1/0）。文件缺失时用启动参数。"""
+        try:
+            with open("/home/deck/bjbot/autorestart") as f:
+                return f.read().strip() == "1"
+        except Exception:
+            return default
     try:
         while True:
             if a.moves and done >= a.moves: break
@@ -315,12 +339,13 @@ def main():
                         fr_iter = None
             if screen_is_gameover(fr_iter):
                 was_over = True
-                if a.auto_restart or a.death_shot:
+                auto_now = replay_switch(a.auto_restart)
+                if auto_now or a.death_shot:
                     log("  ★ 检测到游戏结束（结算画面）")
                     if a.death_shot:
                         n = death_shots(cap, a.death_shot)
                         log("  已连拍 %d 帧到 %s" % (n, a.death_shot))
-                    if a.auto_restart:
+                    if auto_now:
                         click_restart(m)
                         miss = 0
                         ok_new = False
@@ -415,6 +440,49 @@ def main():
             if nd and not prev_nd:
                 log("  ★ 钻石矿：泥土 %d 格（不可消不可换；消旁边的宝石自动挖开）" % nd)
             prev_nd = nd
+            # ★ 钻石矿计时结束检测（每局 1:30）：结束画面不是标准橙色结算
+            #   面板，像素判不出 —— 但游戏时钟会停。判据：有泥 + cs>0（本局
+            #   确实开始过）+ 时钟冻结满 8 次采样（约 20 秒；对局中时钟从不
+            #   冻这么久）。金子不能当条件 —— 结算画面残留本局金子（实测
+            #   13000）。按钮与普通结算同位 (640,738)，实测可点开局。
+            cs = rd.cs_now() if hasattr(rd, "cs_now") else None
+            if cs is not None:
+                if cs == cs_prev:
+                    cs_frozen += 1
+                else:
+                    cs_frozen = 0
+                    end_idle_logged = False
+                    # 时钟在走 = 对局活跃 → 写标记（每个活跃段只写一次）
+                    if cs > 0 and not cs_live_marked:
+                        try:
+                            with open(CS_LIVE, "w") as f:
+                                f.write(str(int(time.time())))
+                        except Exception:
+                            pass
+                        cs_live_marked = True
+                cs_prev = cs
+                if cs_frozen >= 8 and nd > 0 and cs > 0 and marker_live():
+                    try:
+                        os.remove(CS_LIVE)
+                    except Exception:
+                        pass
+                    cs_live_marked = False
+                    if replay_switch(a.auto_restart):
+                        log("  ★ 检测到本局结束（钻石矿计时到，时钟冻结）")
+                        click_restart(m)
+                        log("  已点「再来一次」")
+                        banned.clear(); banned_sticky.clear()
+                        blacklist.clear(); pending = None
+                        dead = 0; cs_frozen = 0; cs_prev = None
+                        t0 = time.time()
+                        time.sleep(1.2)
+                        continue
+                    elif not end_idle_logged:
+                        log("  ■ 本局结束：自动续局=关 → 待命中（不点击）")
+                        banned.clear(); banned_sticky.clear()
+                        blacklist.clear(); pending = None
+                        end_idle_logged = True
+                        dead = 0
             for (i, j), n in list(blacklist.items()):
                 if n >= 3: g[i][j] = "?"
             if a.engine == "fast":
@@ -486,8 +554,13 @@ def main():
                         log("  死局现场 bad=%s banned=%d 棋盘:" % (bad, len(banned)))
                         for row in g:
                             log("    " + " ".join(row))
-                    log("  死局(%d)等洗牌..." % dead)
-                    if dead >= 30: break
+                    if dead % 30 == 0:
+                        log("  死局(%d)等洗牌/新局..." % dead)
+                    if dead >= 30:
+                        # ★ 长死局就地待命，不退出 —— 退出会被守护立刻拉起，
+                        #   又对着同一块冻结盘打一轮（实测 crash-loop）。
+                        #   结算/时钟检测每轮照跑，新局一来自动恢复。
+                        time.sleep(1.0); continue
                     time.sleep(1.0); continue
                 t = rk[0]; pred = t[1]; (i1, j1), (i2, j2) = t[6], t[7]
                 tgset = set((i, j) for i, j, _ in tg)
@@ -518,7 +591,10 @@ def main():
             # ★ 判"有效"要收紧：changed=True 但 real==0 是读数被动画污染的假阳性
             #   （有效交换必得分）。旧判据把这种假阳性当有效 → 清空拉黑 →
             #   同一招被无限重选（"反复算同一招、分数不涨"的根源之一）。
-            effective = ((changed and real != 0) or (real is not None and real > 0))
+            #   ★ 2026-09-25 再收紧：real=None（分数读不到/局间重置）也不能算
+            #   有效 —— 钻石矿实测 None+指纹微变 让两个废招每 0.5 秒无限交替
+            #   （2208 次实际=0）。分数读不到就当被拒，宁可保守。
+            effective = (real is not None and real != 0)
             if effective:
                 ok_n += 1
                 blacklist.pop((i1, j1), None); blacklist.pop((i2, j2), None)
