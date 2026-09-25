@@ -134,6 +134,11 @@ def rank_moves(g, w_special=8.0, w_row=2.0, w_pot=2.0, topk=0, timegems=None,
     """
     tg = set((i, j) for i, j, _ in (timegems or []))
     ban = banned or set()
+    # ★ 钻石矿（2026-09-25）：金子只来自挖泥 —— 配对清除格四邻有泥才挖，
+    #   开放区配对游戏接受但零金（实测一整轮 2208 次实际=0）。
+    #   棋盘上有泥时，贴泥的招按每挖一格 +300 金加权，压倒一切普通分。
+    has_dirt = any("D" in row for row in g)
+    w_dig = 300.0
     out = []
     for i in range(8):
         for j in range(8):
@@ -151,6 +156,14 @@ def rank_moves(g, w_special=8.0, w_row=2.0, w_pot=2.0, topk=0, timegems=None,
                 avg_row = (sum(r for r, _ in cells) / len(cells)) if cells else 0.0
                 pot = potential(fg)
                 score = total + w_special * spec + w_row * avg_row + w_pot * pot
+                if has_dirt:
+                    digs = 0
+                    for (ci, cj) in set(cells):
+                        for di, dj in ((0, 1), (0, -1), (1, 0), (-1, 0)):
+                            ni, nj = ci + di, cj + dj
+                            if 0 <= ni < 8 and 0 <= nj < 8 and g[ni][nj] == "D":
+                                digs += 1
+                    score += w_dig * digs
                 # ★ 闪电模式：这一步吃掉几个时间宝石，每个给巨额加权。
                 #   权重远大于普通得分 —— 时间比分数重要。
                 if tg:

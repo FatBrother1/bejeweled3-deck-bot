@@ -471,11 +471,22 @@ def main():
                         log("  ★ 检测到本局结束（钻石矿计时到，时钟冻结）")
                         click_restart(m)
                         log("  已点「再来一次」")
-                        banned.clear(); banned_sticky.clear()
-                        blacklist.clear(); pending = None
                         dead = 0; cs_frozen = 0; cs_prev = None
                         t0 = time.time()
-                        time.sleep(1.2)
+                        # ★ 等新局真正开跑（时钟开始走 = 发牌+"开始!"动画结束，
+                        #   最多 15 秒）。期间出招必被游戏吃掉、候选全废——
+                        #   实测只等 1.2 秒导致整局候选被拉黑、0 金趴窝。
+                        cs_wa = rd.cs_now()
+                        for _ in range(18):
+                            time.sleep(0.8)
+                            cs_wb = rd.cs_now()
+                            if (cs_wa is not None and cs_wb is not None
+                                    and cs_wb > cs_wa):
+                                break
+                            cs_wa = cs_wb
+                        time.sleep(1.0)
+                        banned.clear(); banned_sticky.clear()
+                        blacklist.clear(); pending = None
                         continue
                     elif not end_idle_logged:
                         log("  ■ 本局结束：自动续局=关 → 待命中（不点击）")
@@ -551,7 +562,8 @@ def main():
                     prev_fp = fp_dead
                     if dead <= 2:
                         # ★ 死局现场诊断：棋盘明明读得到却没有候选 —— 打印看看
-                        log("  死局现场 bad=%s banned=%d 棋盘:" % (bad, len(banned)))
+                        log("  死局现场 bad=%s banned=%d sticky=%d tg=%s 棋盘:"
+                            % (bad, len(banned), len(banned_sticky), tg))
                         for row in g:
                             log("    " + " ".join(row))
                     if dead % 30 == 0:
