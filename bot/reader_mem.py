@@ -208,6 +208,10 @@ class MemReader:
                                "偏移失效" % (GAPP_ADDR, self.gapp or 0))
         self.mod = self            # bot_v6 会调 rd.mod.fingerprint()
         self.still_ms = still_ms
+        # ★ 最近一次读盘附带的额外信息（分数/关卡/特殊宝石/时间宝石）。
+        #   调用方（bot）通过 rd.last_extra 取，不用改 wait_still_and_read 的
+        #   返回签名 —— FastReader 也是 4 元组，保持两者接口一致更省事。
+        self.last_extra = {}
         self.stats = {"frames": 0, "grabs": 0, "visions": 0,
                       "t_grab": 0.0, "t_diff": 0.0, "t_vision": 0.0,
                       "waits": 0, "t_wait": 0.0, "reads": 0}
@@ -299,7 +303,8 @@ class MemReader:
     def read_now(self):
         """立即读一次（不等稳定）。返回 (grid|None, bad)"""
         t0 = time.perf_counter()
-        g, bad, _ = self._read_grid()
+        g, bad, extra = self._read_grid()
+        self.last_extra = extra or {}
         self.stats["t_vision"] += time.perf_counter() - t0
         self.stats["visions"] += 1
         self.stats["reads"] += 1
@@ -365,7 +370,8 @@ class MemReader:
             waited = (time.time() - t0) * 1000
             # 画面静了 → 从内存读棋盘
             tv = time.perf_counter()
-            g, bad, _ = self._read_grid()
+            g, bad, extra = self._read_grid()
+            self.last_extra = extra or {}
             rms = (time.perf_counter() - tv) * 1000
             self.stats["waits"] += 1
             self.stats["t_wait"] += waited
@@ -388,6 +394,7 @@ class MemReader:
         while time.time() - t0 < max_wait:
             tick = time.time()
             g, bad, extra = self._read_grid()
+            self.last_extra = extra or {}
             self.stats["reads"] += 1
             if g is None:
                 time.sleep(POLL)

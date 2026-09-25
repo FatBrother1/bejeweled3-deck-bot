@@ -124,30 +124,38 @@ def board_alive():
 
 
 def screen_is_gameover(frame):
-    """用画面判断是否停在结算画面。
+    """用画面判断是否停在结算画面。返回 True/False/None（None=抓帧失败）。
 
-    实测依据（2026-09-24 实拍结算画面）：
-      结算画面是一整块橙色面板 —— 顶部「最终得分」横幅区
-      约 RGB(202,141,84)，中部棋盘区被面板覆盖约 RGB(208,158,91)，
-      两者都是明显的 R > G > B（橙棕色调）。
-      而游戏中棋盘区是深蓝紫背景 + 彩色宝石，不会有这种整体橙棕。
+    ★ 2026-09-25 第二次重订（第一次也错了，记下来免得再绕）★
 
-    返回 True/False/None（None = 抓帧失败，无法判断）。
+    第一版用 mid(280:340,520:880)：实测该区在两画面上都是 R>140、R-G>56，
+      毫无区分度，必然误报。
+    第二版改用底部条 R>150 且 R-G>40：8 个旧样本全对，但一遇到
+      「开局『开始！』动画」那种画面（dump/f_00.png，bottom 是 R153/RG47）
+      就跨在阈值线上，照样误报。
+
+    现在这个特征是从 9 个样本、5 个区域、4 种标量里筛出来的：
+      结算画面中部那块「等级 / 工匠 / 还有 1,255k」面板是明亮橙黄，蓝分量极低；
+      活跃对局同一位置是左侧的蓝紫色背景，蓝分量很高。物理上说得通。
+
+          区域 panel_top(180:260, 300:620)   R-B 值
+            活跃对局                         -4, 3, 51, 73
+            结算画面                          124
+
+      间隔 51，是所有候选里最大的。再叠一个 R > 200（结算面板 R=229，
+      活跃最高 186）做双保险，9 个样本 9/9 全对。
     """
     if frame is None:
         return None
     try:
         import numpy as np
         f = np.asarray(frame, dtype="float32")
-        top = f[45:95, 480:800]
-        mid = f[280:340, 520:880]
-        tr, tg, tb = top[:, :, 0].mean(), top[:, :, 1].mean(), top[:, :, 2].mean()
-        mr, mg, mb = mid[:, :, 0].mean(), mid[:, :, 1].mean(), mid[:, :, 2].mean()
+        panel = f[180:260, 300:620]
+        r = panel[:, :, 0].mean()
+        b = panel[:, :, 2].mean()
     except Exception:
         return None
-    orange_top = (tr > 150 and tr > tg + 25 and tg > tb + 20)
-    orange_mid = (mr > 140 and mr > mg + 20 and mg > mb + 10)
-    return bool(orange_top and orange_mid)
+    return bool(r > 200 and (r - b) > 100)
 
 
 def death_shots(cap, d, n=14, gap=0.75):
@@ -281,19 +289,26 @@ def main():
             #   （Board 指针依然有效，返回冻结的棋盘），所以 `g is None` 不成立。
             #   症状：bot 对着结算画面一直"下棋"（反复算同一招、手牌恒定不变）。
             #   判据必须用画面（结算画面是整块橙色面板）。
-            # 需要抓帧的条件：要判游戏结束、或者 auto 模式要复查模式。
-            # （后者容易漏 —— 不开 --auto-restart 时也得抓，否则复查永远拿不到帧）
+            # ★★ 结算检测必须【无条件】跑（2026-09-25 实测教训）★★
+            #   之前它只在开了 --auto-restart/--death-shot 时才执行，
+            #   于是不带这两个参数跑时，撞上结算画面会【死循环】：
+            #   实测 60 步里连续 35 步是同一招 (1,4)<->(2,4)、全部 实际=0、分数 0。
+            #   原因：结算画面上棋盘是冻结的、但 Board 指针有效、也能读到棋盘，
+            #   求解器照常算出走法，而游戏在结算界面根本不响应交换。
+            #   ⇒ 判据必须每轮都查；--auto-restart 只决定【查到之后做什么】。
             fr_iter = None
-            need_frame = (a.auto_restart or a.death_shot
-                          or (a.mode_auto and done > 0 and done % 20 == 0))
+            need_frame = True
             if need_frame:
-                if getattr(rd, "cap", None) is not None:
+                # 优先用 reader 自己的抓帧器；纯内存模式下 rd.cap 是 None，
+                # 这时用 bot 自己的 cap，否则永远拿不到帧、判据形同虚设。
+                _c = getattr(rd, "cap", None) or cap
+                if _c is not None:
                     try:
-                        fr_iter = rd.cap.get(timeout=0.5)
+                        fr_iter = _c.get(timeout=0.5)
                     except Exception:
                         fr_iter = None
-            if a.auto_restart or a.death_shot:
-                if screen_is_gameover(fr_iter):
+            if screen_is_gameover(fr_iter):
+                if a.auto_restart or a.death_shot:
                     log("  ★ 检测到游戏结束（结算画面）")
                     if a.death_shot:
                         n = death_shots(cap, a.death_shot)
@@ -321,8 +336,11 @@ def main():
                             time.sleep(2.5)
                         t0 = time.time()
                         continue
-                    else:
-                        break
+                else:
+                    # 没开 --auto-restart：不该继续对着结算画面空转。
+                    # 之前这里会一路跑到步数上限，白烧几十步。
+                    log("  ■ 游戏已结束，停止（要自动续局请加 --auto-restart）")
+                    break
 
             # ★ auto 模式：运行中每 20 步复查一次（玩家可能中途换了模式）
             if a.mode_auto and done > 0 and done % 20 == 0 and fr_iter is not None:
@@ -418,7 +436,14 @@ def main():
                         % ("".join(hand), solver_poker.get_last_target(),
                            hv[0], t[8], "  ★目标色为多数色" if len(t) > 9 and t[9] else ""))
             else:
-                rk = solver_pro.rank_moves(g)
+                # ★ 闪电模式：把时间宝石位置喂给求解器，让它优先去消。
+                #   限时模式里不拿时间宝石就必死 —— 实测标记是
+                #   flags & 131072（COUNTER 位），计数在 Piece+0x244。
+                tg = (rd.last_extra or {}).get("timegems") or []
+                if tg:
+                    log("  ⏱ 时间宝石 %d 个: %s"
+                        % (len(tg), ", ".join("(%d,%d)+%d" % t for t in tg)))
+                rk = solver_pro.rank_moves(g, timegems=tg)
                 if not rk:
                     dead += 1
                     log("  死局(%d)等洗牌..." % dead)
