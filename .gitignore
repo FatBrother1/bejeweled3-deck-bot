@@ -32,6 +32,9 @@ Thumbs.db
 *.jpg
 *.mp4
 !docs/**/*.png
+# ★ 例外：模式识别的参考图是功能必需文件，必须入库
+#   （which_mode.py 靠它们做图像兜底识别，没有就失效）
+!decky-plugin/BJBot/refs/*.png
 
 # 临时
 /tmp/
