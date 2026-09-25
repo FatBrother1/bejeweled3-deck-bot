@@ -18,18 +18,7 @@ logger = decky.logger
 
 HOME = "/home/deck"
 RUN2 = os.path.join(HOME, "run2.sh")
-# ★★ 日志文件有两个，别搞混（2026-09-25 实测踩坑）★★
-#   bot.out —— watch2.py 守护拉起的 bot_v6.py 的输出（**实际在写的就是这个**）
-#   bot.log —— 旧版 bot 写的，2026-09-24 之后就没再更新过
-#   插件原先读的是 bot.log，于是「识别方式/步数/时长」全显示陈旧数据。
-LOG = os.path.join(HOME, "bjbot", "bot.out")
-LOG_OLD = os.path.join(HOME, "bjbot", "bot.log")
-
-# bot 内核脚本（实际干活的那个）与守护脚本。
-#   UI 上要显示"启动的是哪个脚本"，排查时一眼能看出装的是哪一版。
-BOT_SCRIPT = os.path.join(HOME, "bot_v6.py")
-WATCH_SCRIPT = os.path.join(HOME, "watch2.py")
-MODE_SCRIPT = os.path.join(HOME, "which_mode.py")
+LOG = os.path.join(HOME, "bjbot", "bot.log")
 
 
 def _env():
@@ -101,94 +90,10 @@ class Plugin:
             st["game"] = "运行中" if _pgrep("Bejeweled3.ex[e]") else "未运行"
         st["running"] = (st["bot"] == "运行中")
         st["game_running"] = (st["game"] == "运行中")
-
-        # ── 新增：给面板用的五项 ──────────────────────────
-        # ① 当前游戏模式（自动检测）：内存优先，图像兜底
-        st["mode"] = "—"
-        st["mode_src"] = ""
-        if st["game_running"] and os.path.exists(MODE_SCRIPT):
-            rc3, out3 = _run(["/usr/bin/python3", MODE_SCRIPT, "--json"], timeout=25)
-            if rc3 == 0 and out3.strip():
-                try:
-                    import json as _json
-                    d = _json.loads(out3.strip().splitlines()[-1])
-                    st["mode"] = d.get("name") or "—"
-                    st["mode_src"] = d.get("src") or ""
-                except Exception:
-                    pass
-
-        # ② 跑的是哪个脚本
-        st["script"] = os.path.basename(BOT_SCRIPT)
-        st["script_path"] = BOT_SCRIPT
-        st["script_ok"] = os.path.exists(BOT_SCRIPT)
-        st["daemon_script"] = os.path.basename(WATCH_SCRIPT)
-
-        # ③ 识别后端：从 bot 日志抓（它会打"后端自动选择: 内存/视觉"）
-        #    没跑过就是"—"
-        st["backend"] = "—"
-        # ④ 运行时长 / 已走步数：从日志抓最后一条
-        st["uptime"] = "—"
-        st["steps"] = "—"
-
-        # 识别方式 / 步数 / 时长都从日志末段取。
-        # ★ 但**必须先确认 bot 真的在跑** —— 否则读到的是上一次运行的历史，
-        #   会显示"已运行 125 分钟"而实际根本没开（实测踩过这个坑）。
         if os.path.exists(LOG):
             rc2, tail = _run(["/usr/bin/tail", "-n", "6", LOG], timeout=8)
             if rc2 == 0:
                 st["log_tail"] = tail.strip()
-
-            # ★ 后端/步数/时长必须从【本次启动之后】的日志里找。
-            #   踩过的坑：bot.out 是追加写的，累积了几千行历史，
-            #   只 tail 最后 40 行够不到启动行（后端信息在第 2183 行、
-            #   启动行在第 2184 行），导致 backend 一直显示"—"。
-            #   做法：先定位最后一次 "=== bot v6" 启动行，只取它之后的内容。
-            if st["running"]:
-                rc3, allout = _run(["/usr/bin/tail", "-n", "3000", LOG], timeout=15)
-                if rc3 == 0 and allout:
-                    # 注意：bot 的启动顺序是
-                    #     "内存后端: ..."        ← 后端信息在这里
-                    #     "=== bot v6 ... ==="   ← 启动行
-                    #     "自动识别模式: ..."     ← 模式识别
-                    # 所以从启动行【往前多取一段】，否则会漏掉后端那行。
-                    # （这是我改 --mode auto 时踩的坑：起初只从启动行往后截，
-                    #   结果 backend 永远显示"—"。）
-                    sess = allout
-                    marker = "=== bot v6"
-                    idx = allout.rfind(marker)
-                    if idx >= 0:
-                        start = max(0, idx - 400)
-                        sess = allout[start:]
-                    import re as _re
-                    for line in sess.splitlines():
-                        if "内存后端:" in line or "后端自动选择: 内存" in line:
-                            st["backend"] = "内存"
-                        elif "后端自动选择: 视觉" in line or "视觉后端" in line:
-                            st["backend"] = "视觉"
-                        m = _re.search(r"#(\d+)\s", line)
-                        if m:
-                            st["steps"] = m.group(1)
-                    # 时间戳只取【启动行之后】的 ——
-                    # 往前多取那 400 字符是为了抓后端信息，
-                    # 但它带着上一会话的时间戳，算进去会得出几百分钟的假时长。
-                    after = sess
-                    mi = sess.rfind("=== bot v6")
-                    if mi >= 0:
-                        after = sess[mi:]
-                    stamps = [l[:8] for l in after.splitlines()
-                              if len(l) > 8 and l[2] == ":" and l[5] == ":"]
-                    if len(stamps) >= 2:
-                        try:
-                            a = stamps[0].split(":")
-                            b2 = stamps[-1].split(":")
-                            sa = int(a[0]) * 3600 + int(a[1]) * 60 + int(a[2])
-                            sb = int(b2[0]) * 3600 + int(b2[1]) * 60 + int(b2[2])
-                            dd = sb - sa
-                            if dd < 0:
-                                dd += 86400
-                            st["uptime"] = "%d分%02d秒" % (dd // 60, dd % 60)
-                        except Exception:
-                            pass
         return st
 
     # ── 开 ──────────────────────────────────────

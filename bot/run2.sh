@@ -39,7 +39,7 @@ case "${1:-help}" in
       echo "bot : $(pgrep -f 'python3 /home/deck/bo[t]_' >/dev/null && echo 运行中 || echo 未运行)"
       echo "游戏: $(pgrep -f 'Bejeweled3.ex[e]' >/dev/null && echo 运行中 || echo 未运行)"
       ;;
-  logs)   tail -n "${2:-30}" /home/deck/bjbot/bot.log ;;
+  logs)   tail -n "${2:-30}" /home/deck/bjbot/bot.out ;;
   play)   exec python3 $BOT --engine pro --vision mem --mode auto --still-ms $STILL --moves "${2:-0}" ;;
   turbo)  exec python3 $BOT --engine pro --vision mem --mode auto --still-ms $STILL --moves "${2:-0}" ;;
   dry)    exec python3 $BOT --engine pro --vision mem --mode auto --still-ms $STILL --no-click --moves "${2:-3}" ;;

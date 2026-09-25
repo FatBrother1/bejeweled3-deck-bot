@@ -6,7 +6,7 @@ import {
   staticClasses,
 } from "@decky/ui";
 import { callable } from "@decky/api";
-import { FaPlay, FaStop, FaTerminal, FaGamepad } from "react-icons/fa";
+import { FaPlay, FaStop, FaGamepad } from "react-icons/fa";
 import React, { useEffect, useState } from "react";
 
 // ── 后端 RPC 绑定（走 @decky/api，这才是正规做法，不是猜 window 全局）──
@@ -18,6 +18,16 @@ type Status = {
   game_running: boolean;
   log_tail?: string;
   run2: boolean;
+  // 新模式面板用的字段
+  mode?: string;         // 当前游戏模式，如"禅意"
+  mode_src?: string;     // 怎么认出来的: mem/img/size/...
+  script?: string;       // 跑的是哪个脚本，如 "bot_v6.py"
+  script_path?: string;
+  script_ok?: boolean;
+  daemon_script?: string;
+  backend?: string;      // 识别后端: 内存/视觉
+  uptime?: string;       // 已运行时长
+  steps?: string;        // 已走步数
 };
 
 const getStatus = callable<[], Status>("status");
@@ -25,13 +35,28 @@ const doStart = callable<[], { ok: boolean; msg: string; status?: Status }>("sta
 const doStop = callable<[], { ok: boolean; msg: string; status?: Status }>("stop");
 const getLogs = callable<[number], { ok: boolean; text: string }>("logs");
 
-function Line({ label, value, color }: { label: string; value: string; color?: string }) {
+function Row({ label, value, color }: { label: string; value: string; color?: string }) {
   return (
-    <div style={{ display: "flex", justifyContent: "space-between", fontSize: "13px", padding: "2px 0" }}>
-      <span style={{ opacity: 0.7 }}>{label}</span>
-      <span style={{ fontWeight: 600, color: color ?? "#dcdedf" }}>{value}</span>
+    <div style={{ display: "flex", justifyContent: "space-between", fontSize: "13px", padding: "2px 0", gap: "8px" }}>
+      <span style={{ opacity: 0.7, flexShrink: 0 }}>{label}</span>
+      <span
+        style={{
+          fontWeight: 600, color: color ?? "#dcdedf",
+          textAlign: "right", wordBreak: "break-all", minWidth: 0,
+        }}
+      >
+        {value}
+      </span>
     </div>
   );
+}
+
+// 模式名的配色：牌局单独一色（它逻辑完全不同），菜单/未知灰，其余正常
+function modeColor(m?: string): string {
+  if (!m || m === "—" || m === "未知") return "#8b929a";
+  if (m === "牌局") return "#ffb74d";
+  if (m === "菜单") return "#8b929a";
+  return "#59bf40";
 }
 
 function Content() {
@@ -50,6 +75,7 @@ function Content() {
 
   useEffect(() => {
     refresh();
+    // 3 秒刷一次。模式检测要抓帧+读内存，约 0.3 秒，这个频率不碍事。
     const t = setInterval(refresh, 3000);
     return () => clearInterval(t);
   }, []);
@@ -69,16 +95,31 @@ function Content() {
   };
 
   const running = !!st?.running;
-  const game = !!st?.game_running;
+  const gameOn = !!st?.game_running;
+  const mode = st?.mode ?? "—";
 
   return (
     <>
       <PanelSection title="Bejeweled 3 自动 bot">
         <PanelSectionRow>
           <div style={{ width: "100%" }}>
-            <Line label="bot" value={running ? "● 运行中" : "○ 已停止"} color={running ? "#59bf40" : "#8b929a"} />
-            <Line label="游戏" value={game ? "运行中" : "未运行"} color={game ? "#59bf40" : "#8b929a"} />
-            <Line label="守护" value={st ? (st.daemon === "active" ? "已启用" : "未启用") : "…"} />
+            {/* 第一眼要看到的三件事：跑没跑、游戏开没开、什么模式 */}
+            <Row
+              label="状态"
+              value={running ? (gameOn ? "运行中" : "运行中（等游戏启动）") : "未启动"}
+              color={running ? "#59bf40" : "#8b929a"}
+            />
+            <Row
+              label="现模式"
+              value={gameOn ? mode : "游戏没开"}
+              color={gameOn ? modeColor(mode) : "#8b929a"}
+            />
+            <Row label="识别方式" value={st?.backend ?? "—"} />
+            <Row
+              label="已走步数"
+              value={running ? (st?.steps ?? "—") : "—"}
+            />
+            <Row label="已运行" value={running ? (st?.uptime ?? "—") : "—"} />
           </div>
         </PanelSectionRow>
 
@@ -97,8 +138,28 @@ function Content() {
         <PanelSectionRow>
           <div style={{ fontSize: "11px", opacity: 0.6, padding: "4px 0", lineHeight: 1.5, width: "100%" }}>
             开启后常驻守护：游戏一开就自动跑，退出游戏就停。
+            模式由 bot 自己认（牌局会凑同花，其它模式正常打分），不用手选。
             <br />
-            重启 Deck 后失效，需重新点一次「开启」。
+            重启 Deck 后失效，需要回来再点一次「开启」。
+          </div>
+        </PanelSectionRow>
+      </PanelSection>
+
+      {/* 装的是哪个脚本 —— 排查时最有用的一行 */}
+      <PanelSection title="正在运行的脚本">
+        <PanelSectionRow>
+          <div style={{ width: "100%" }}>
+            <Row
+              label="主脚本"
+              value={st ? (st.script ?? "—") + (st.script_ok === false ? "（缺失！）" : "") : "…"}
+              color={st?.script_ok === false ? "#e05252" : undefined}
+            />
+            <Row label="守护脚本" value={st?.daemon_script ?? "—"} />
+            {st?.script_path && (
+              <div style={{ fontSize: "10px", opacity: 0.5, paddingTop: "2px", wordBreak: "break-all" }}>
+                {st.script_path}
+              </div>
+            )}
           </div>
         </PanelSectionRow>
       </PanelSection>
