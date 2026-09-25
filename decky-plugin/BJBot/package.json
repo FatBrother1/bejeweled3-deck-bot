@@ -1,6 +1,6 @@
 {
   "name": "BJBot",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Bejeweled 3 auto bot switch for Steam Deck Game Mode",
   "type": "module",
   "main": "main.py",

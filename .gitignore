@@ -15,6 +15,7 @@ pnpm-lock.yaml
 *.log
 *.out
 *.json.bak
+*.bak
 pytest_cache/
 
 # 编辑器
