@@ -72,7 +72,8 @@ python3 calib.py
 | `watch2.py` | 守护进程 |
 | `calib.py` | 标定工具 |
 | `install.sh` | 安装脚本 |
-| `bjbot/board.json` | 标定数据 |
+| `bjbot/board.json` | 标定数据（经典/禅意等） |
+| `bjbot/board_diamond.json` | 钻石矿的标定（矿坑的格子位置和经典不一样，低约 54px） |
 
 ## 两个读取后端
 
