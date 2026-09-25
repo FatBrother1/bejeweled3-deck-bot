@@ -38,6 +38,16 @@ FLAG_FLAME = 1
 FLAG_HYPERCUBE = 2
 FLAG_STAR = 4
 FLAG_SUPERNOVA = 5
+# ★ 时间宝石 / 计数宝石（闪电模式的核心机制）
+#   实测（2026-09-25，闪电模式实机抓取）：
+#     flags = 131072 (0x20000) 且 +0x244 的计数 = 5（画面上正是"+5"）
+#   出现 8 次、计数全是 5，与画面完全吻合。
+#   来源：bognarit80/Bejeweled3PlusExtender 的 sandboxfunctions.cpp 里
+#     AddGemCounter() 判断 (gemPtr+552) & PieceFlag::COUNTER，
+#     计数存在 gemPtr+580；注释写明 "Works on both Time and Counter gems"。
+#     552 = 0x228、580 = 0x244，两边对得上。
+FLAG_COUNTER = 131072
+OFF_COUNTER = 0x244
 
 # 超立方体没有固定颜色（color = -1），但状态位是 HYPERCUBE。
 # 视觉路线把它识别成 "S"，这里保持一致，避免被当成未知格。
@@ -232,6 +242,7 @@ class MemReader:
         grid = []
         bad = 0
         flags = []
+        timegems = []
         for i in range(8):                      # i = 行 → y
             row = []
             for j in range(8):                  # j = 列 → x
@@ -262,10 +273,15 @@ class MemReader:
                     bad += 1
                 if f:
                     flags.append((i, j, f))
+                # ★ 时间宝石（闪电模式）：记下格子与剩余计数，
+                #   供 bot 优先去消它 —— 不然时间不够，必死。
+                if f is not None and (f & FLAG_COUNTER):
+                    timegems.append((i, j, pr.i32(piece + OFF_COUNTER)))
             grid.append(row)
         extra = {"score": pr.i32(board + OFF_SCORE),
                  "level": pr.i32(board + OFF_LEVEL),
                  "flags": flags,
+                 "timegems": timegems,          # [(行, 列, 计数), ...]
                  "board": board}
         return grid, bad, extra
 

@@ -118,7 +118,15 @@ def potential(g):
             if ok(a) and a == c and b != a: n += 1
     return n
 
-def rank_moves(g, w_special=8.0, w_row=2.0, w_pot=2.0, topk=0):
+def rank_moves(g, w_special=8.0, w_row=2.0, w_pot=2.0, topk=0, timegems=None):
+    """给所有走法打分。
+
+    timegems: [(行, 列, 计数), ...] —— 闪电模式的时间宝石位置。
+      ★ 有它时必须优先去消：闪电模式是限时的，不拿时间宝石就等着时间耗尽。
+        实测（2026-09-25）时间宝石的标记是 flags & 131072、计数在 +0x244。
+        没有这个参数时行为与从前完全一致（不影响其它模式）。
+    """
+    tg = set((i, j) for i, j, _ in (timegems or []))
     out = []
     for i in range(8):
         for j in range(8):
@@ -134,6 +142,12 @@ def rank_moves(g, w_special=8.0, w_row=2.0, w_pot=2.0, topk=0):
                 avg_row = (sum(r for r, _ in cells) / len(cells)) if cells else 0.0
                 pot = potential(fg)
                 score = total + w_special * spec + w_row * avg_row + w_pot * pot
+                # ★ 闪电模式：这一步吃掉几个时间宝石，每个给巨额加权。
+                #   权重远大于普通得分 —— 时间比分数重要。
+                if tg:
+                    t_hit = sum(1 for c in set(cells) if c in tg)
+                    if t_hit:
+                        score += 100000.0 * t_hit
                 out.append((score, total, cleared, casc, spec, pot,
                             (i, j), (i2, j2), fg, runs))
     out.sort(key=lambda x: -x[0])
