@@ -264,6 +264,15 @@ class MemReader:
                     #   实测 (4,2) 颜色=-1 状态=2，若判 "?" 会让 solver 误判死局。
                     if f == FLAG_HYPERCUBE:
                         g = GLYPH_HYPERCUBE
+                    elif (c == -1 and pr.i32(piece + OFF_PRECOLOR) == -1
+                          and f in (0, 0x10000)):
+                        # ★ 钻石矿的泥土格（2026-09-25 实测两种状态：
+                        #   color=-1/precolor=-1 且 flags=0x0（埋着的泥）或
+                        #   flags=0x10000（邻接已挖开、可被挖的泥），泥下宝石
+                        #   挖出来才存在。它是棋盘的合法状态而非读取失败，
+                        #   给专属字形 'D' 且【不计入 bad】，否则 30 格泥土
+                        #   直接让整盘读不出（MAX_BAD=3）。
+                        g = "D"
                     else:
                         # 其它无色情形：用原色 +0x21C 兜底（超立方体带原色）
                         pc = pr.i32(piece + OFF_PRECOLOR)
@@ -454,7 +463,7 @@ class MemReader:
     def wait_still_and_read(self, thr=None, need=None, max_wait=4.0,
                             min_still_ms=None, require_motion=False,
                             motion_timeout=3.0, min_score_delta=0,
-                            min_anim_ms=520.0):
+                            min_anim_ms=520.0, no_motion_exit=None):
         """轮询内存直到棋盘稳定 → 返回 (grid|None, bad, ms_waited, ms_read)
 
         require_motion=True 时要求先见到「变化」再见到「稳定」。
@@ -502,7 +511,11 @@ class MemReader:
             score_moved = (sc is not None and last_score is not None
                            and abs(sc - last_score) >= max(1, min_score_delta))
             last_score = sc
-            fp_moved = (last_fp is not None and fp != last_fp)
+            # ★ 带洞的棋盘（消除/下落瞬间 piece 颜色瞬时无效 → "?"）
+            #   视为仍在运动：洞没消失就不能当"静止"出手，否则拿到残盘去规划
+            #   （2026-09-25 实测死局根源：bad=21 的快照 6 秒后 16 个候选）。
+            has_holes = any(c == "?" for row in g for c in row)
+            fp_moved = (last_fp is not None and fp != last_fp) or has_holes
             if last_fp is None:
                 stable_since = tick
             elif fp_moved or score_moved:
@@ -516,6 +529,11 @@ class MemReader:
             last = (g, bad)
             still_ok = (stable_since is not None and
                         (tick - stable_since) * 1000 >= min_still_ms)
+            # ★ 被拒的交换没有任何运动（棋盘、分数都不动）——等够
+            #   no_motion_exit 秒就返回，别把 max_wait 烧满（4 秒白等）。
+            if (no_motion_exit and require_motion and not motion
+                    and time.time() - t0 >= no_motion_exit):
+                break
             if require_motion:
                 # 内存后端的实测教训（2026-09-24）：
                 #   连续 3 步无效，等待时间都恰好 1200ms 左右，

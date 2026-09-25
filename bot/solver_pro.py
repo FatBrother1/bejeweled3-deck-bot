@@ -18,9 +18,10 @@ def base_pts(n):
     return 500 if n >= 8 else BASE_PTS.get(n, 0)
 
 def same(a, b):
-    """连线判定：'S' 不参与普通连线。"""
+    """连线判定：'S' 不参与普通连线。'D'=钻石矿泥土，同样不可消。"""
     if a in ("?", None) or b in ("?", None): return False
     if a == "S" or b == "S": return False
+    if a == "D" or b == "D": return False
     return a == b
 
 def find_matches(g):
@@ -141,7 +142,8 @@ def rank_moves(g, w_special=8.0, w_row=2.0, w_pot=2.0, topk=0, timegems=None,
                 if i2 > 7 or j2 > 7: continue
                 if frozenset(((i, j), (i2, j2))) in ban: continue
                 a, b = g[i][j], g[i2][j2]
-                if a in ("?", None) or b in ("?", None): continue
+                # 'D'=钻石矿泥土：游戏不允许交换泥块，直接跳过
+                if a in ("?", "D", None) or b in ("?", "D", None): continue
                 if a == b: continue
                 total, casc, cells, runs, spec, fg = simulate(g, i, j, i2, j2)
                 if total <= 0: continue

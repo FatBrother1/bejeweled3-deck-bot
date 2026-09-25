@@ -278,17 +278,12 @@ def main():
     rows = []; tw = 0.0; tv = 0.0; td = 0.0
     blacklist = {}
     banned = set()          # ★ 走法级拉黑：被拒的招在棋盘变化前绝不再出
+    banned_sticky = set()   # ★ 整局拉黑：吃时间宝石的招被拒后本局不再试
     pending = None
+    prev_fp = None          # ★ 死局时检测洗牌用
+    prev_nd = 0             # ★ 钻石矿泥土格数（变化沿触发日志）
     was_over = False        # ★ 上一帧是否在结算画面（续局开关状态机）
     idle_logged = False     # 待命提示只打一次
-
-    def replay_switch(default):
-        """续局开关：读插件面板写的标记文件（1/0）。文件缺失时用启动参数。"""
-        try:
-            with open("/home/deck/bjbot/autorestart") as f:
-                return f.read().strip() == "1"
-        except Exception:
-            return default
     try:
         while True:
             if a.moves and done >= a.moves: break
@@ -320,13 +315,12 @@ def main():
                         fr_iter = None
             if screen_is_gameover(fr_iter):
                 was_over = True
-                auto_now = replay_switch(a.auto_restart)
-                if auto_now or a.death_shot:
+                if a.auto_restart or a.death_shot:
                     log("  ★ 检测到游戏结束（结算画面）")
                     if a.death_shot:
                         n = death_shots(cap, a.death_shot)
                         log("  已连拍 %d 帧到 %s" % (n, a.death_shot))
-                    if auto_now:
+                    if a.auto_restart:
                         click_restart(m)
                         miss = 0
                         ok_new = False
@@ -349,7 +343,7 @@ def main():
                             time.sleep(2.5)
                         # ★ 新棋盘 = 旧拉黑全部作废；旧 pending 是上一局的棋盘，
                         #   拿它出招必被拒（对着新棋盘出旧招 = 开局白送几步）
-                        banned.clear(); blacklist.clear(); pending = None
+                        banned.clear(); banned_sticky.clear(); blacklist.clear(); pending = None
                         t0 = time.time()
                         continue
                 else:
@@ -361,7 +355,7 @@ def main():
                         log("  ■ 当局结束：自动续局=关 → 待命中（不点击；"
                             "玩家手动开局后自动继续）")
                         # 新一局的棋盘与旧局无关，旧拉黑/pending 全部作废
-                        banned.clear(); blacklist.clear(); pending = None
+                        banned.clear(); banned_sticky.clear(); blacklist.clear(); pending = None
                         idle_logged = True
                     time.sleep(1.0)
                     continue
@@ -381,7 +375,7 @@ def main():
                         log("  牌局模式：优先凑同花")
                     dead = 0
                     pending = None
-                    banned.clear(); blacklist.clear()
+                    banned.clear(); banned_sticky.clear(); blacklist.clear()
 
             # ★ pending 优化：上一步结束时已确认静止，直接复用其结果
             if pending is not None and not a.no_pending:
@@ -416,6 +410,11 @@ def main():
                     time.sleep(0.5); miss = 0
                 continue
             miss = 0
+            # ★ 钻石矿识别（2026-09-25）：泥土格读作 'D'，从无到有时打一行
+            nd = sum(row.count("D") for row in g)
+            if nd and not prev_nd:
+                log("  ★ 钻石矿：泥土 %d 格（不可消不可换；消旁边的宝石自动挖开）" % nd)
+            prev_nd = nd
             for (i, j), n in list(blacklist.items()):
                 if n >= 3: g[i][j] = "?"
             if a.engine == "fast":
@@ -448,7 +447,7 @@ def main():
                 if not known:
                     # 手牌全背面：没有花色信息。这时也【不能】乱打 ——
                     # 随便凑出的低阶牌型会累积骷髅。仅在别无选择时按普通评分走。
-                    rk = solver_pro.rank_moves(g, banned=banned)
+                    rk = solver_pro.rank_moves(g, banned=banned | banned_sticky)
                     if not rk:
                         dead += 1
                         if dead >= 30: break
@@ -473,9 +472,15 @@ def main():
                 if tg:
                     log("  ⏱ 时间宝石 %d 个: %s"
                         % (len(tg), ", ".join("(%d,%d)+%d" % t for t in tg)))
-                rk = solver_pro.rank_moves(g, timegems=tg, banned=banned)
+                rk = solver_pro.rank_moves(g, timegems=tg,
+                                           banned=banned | banned_sticky)
                 if not rk:
                     dead += 1
+                    fp_dead = rd.mod.fingerprint(g)
+                    if fp_dead != prev_fp:
+                        # 棋盘自己变了（游戏洗牌/换盘）→ 旧拉黑全部作废
+                        banned_sticky.clear(); banned.clear()
+                    prev_fp = fp_dead
                     if dead <= 2:
                         # ★ 死局现场诊断：棋盘明明读得到却没有候选 —— 打印看看
                         log("  死局现场 bad=%s banned=%d 棋盘:" % (bad, len(banned)))
@@ -499,7 +504,12 @@ def main():
             dms = (time.perf_counter() - ts) * 1000
             td += dms
             done += 1
-            g2, _, w2, v2 = rd.wait_still_and_read(require_motion=True, min_still_ms=a.still_ms)
+            # ★ 被拒的交换不会有任何运动（棋盘、分数都不动），1.2 秒还不见
+            #   运动就直接当被拒处理，别把 4 秒 max_wait 烧满（实测被拒一步白等 4 秒，
+            #   光标钉在原地干等 —— 用户看到的就是"对着一个棋子乱点"）。
+            g2, _, w2, v2 = rd.wait_still_and_read(require_motion=True,
+                                                   min_still_ms=a.still_ms,
+                                                   no_motion_exit=1.2)
             tw += w2; tv += v2
             sa = score()
             changed = (g2 is not None and rd.mod.fingerprint(g2) != f0)
@@ -514,15 +524,24 @@ def main():
                 blacklist.pop((i1, j1), None); blacklist.pop((i2, j2), None)
                 # ★ 棋盘变了：之前被拒的招现在可能有效，全部解禁
                 banned.clear()
-                # ★ 复用本次的静止结果，下一步跳过"等静止"
-                if g2 is not None and not a.no_pending:
+                # ★ 复用本次的静止结果，下一步跳过"等静止"。
+                #   但棋盘带洞（消除动画瞬间 piece 颜色无效）不存 ——
+                #   拿有洞的棋盘规划必出错（2026-09-25 实测死局的根源）。
+                if (g2 is not None and not a.no_pending
+                        and not any(c == "?" for row in g2 for c in row)):
                     pending = g2
             else:
                 blacklist[(i1, j1)] = blacklist.get((i1, j1), 0) + 1
                 blacklist[(i2, j2)] = blacklist.get((i2, j2), 0) + 1
                 # ★ 走法级拉黑（阈值 1）：棋盘没变时同一招必再被拒，
                 #   不 ban 就会连续重复同一招。棋盘一变即全部解禁。
-                banned.add(frozenset(((i1, j1), (i2, j2))))
+                mv = frozenset(((i1, j1), (i2, j2)))
+                banned.add(mv)
+                # ★ 吃时间宝石的招被拒：整局拉黑。+100000 的权重会让它每次都排
+                #   最前，动态拉黑又会被下一个有效步清掉 —— 结果就是对着宝石格
+                #   一遍遍地点（2026-09-25 实测 #131~#135 连续 4 次全被拒）。
+                if tgset and ((i1, j1) in tgset or (i2, j2) in tgset):
+                    banned_sticky.add(mv)
             el = time.time() - t0
             rows.append({"n": done, "pred": pred, "real": real, "chg": bool(changed),
                          "eff": bool(effective), "drag_ms": round(dms, 1),
