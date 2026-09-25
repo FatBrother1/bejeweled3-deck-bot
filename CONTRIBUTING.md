@@ -35,7 +35,8 @@ node verify.mjs        # 必须全过
 
 ## 关于 AI 开发
 
-这个项目全程由 AI 写的，模型是 deepseek-v4.1-flash。如果你也想用 AI 做类似
+这个项目全程由 AI 写的，模型先后用过 deepseek-v4.1-flash 和
+glm-5.3-flash。如果你也想用 AI 做类似
 的东西，有几点值得注意。
 
 所有结论都要有实测证据。AI 很容易给出看起来合理但实际是错的推断，

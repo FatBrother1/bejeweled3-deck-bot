@@ -39,7 +39,7 @@ if [ -n "$TOKEN" ]; then
     -X POST https://api.github.com/user/repos \
     -H "Authorization: token ${TOKEN}" \
     -H "Accept: application/vnd.github+json" \
-    -d "{\"name\":\"${REPO}\",\"description\":\"Bejeweled 3 auto-play bot for Steam Deck + Game Mode control plugin. 100% AI-developed (deepseek-v4.1-flash).\",\"private\":$([ "$VISIBILITY" = "private" ] && echo true || echo false),\"has_issues\":true,\"has_wiki\":false}")
+    -d "{\"name\":\"${REPO}\",\"description\":\"Bejeweled 3 auto-play bot for Steam Deck. Reads the board from game memory (read-only, never writes), plays with a simulated mouse. + Decky plugin for Game Mode. 100% AI-developed.\",\"private\":$([ "$VISIBILITY" = "private" ] && echo true || echo false),\"has_issues\":true,\"has_wiki\":false}")
   if [ "$RESP" = "201" ]; then
     echo "   ✅ 仓库已创建"
   elif [ "$RESP" = "422" ]; then
