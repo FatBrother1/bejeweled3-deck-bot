@@ -281,6 +281,14 @@ def main():
     pending = None
     was_over = False        # ★ 上一帧是否在结算画面（续局开关状态机）
     idle_logged = False     # 待命提示只打一次
+
+    def replay_switch(default):
+        """续局开关：读插件面板写的标记文件（1/0）。文件缺失时用启动参数。"""
+        try:
+            with open("/home/deck/bjbot/autorestart") as f:
+                return f.read().strip() == "1"
+        except Exception:
+            return default
     try:
         while True:
             if a.moves and done >= a.moves: break
@@ -312,12 +320,13 @@ def main():
                         fr_iter = None
             if screen_is_gameover(fr_iter):
                 was_over = True
-                if a.auto_restart or a.death_shot:
+                auto_now = replay_switch(a.auto_restart)
+                if auto_now or a.death_shot:
                     log("  ★ 检测到游戏结束（结算画面）")
                     if a.death_shot:
                         n = death_shots(cap, a.death_shot)
                         log("  已连拍 %d 帧到 %s" % (n, a.death_shot))
-                    if a.auto_restart:
+                    if auto_now:
                         click_restart(m)
                         miss = 0
                         ok_new = False

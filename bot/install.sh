@@ -9,6 +9,8 @@ set -e
 HERE="$(cd "$(dirname "$0")" && pwd)"
 TARGET="${1:-$HOME}"
 echo "════ Bejeweled 3 bot 安装 ════"
+mkdir -p /home/deck/bjbot
+[ -f /home/deck/bjbot/autorestart ] || echo 1 > /home/deck/bjbot/autorestart
 echo "源目录: $HERE"
 echo "目标  : $TARGET"
 echo

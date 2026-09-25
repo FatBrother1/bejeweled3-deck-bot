@@ -3,6 +3,7 @@ import {
   PanelSection,
   PanelSectionRow,
   ButtonItem,
+  ToggleField,
   staticClasses,
 } from "@decky/ui";
 import { callable } from "@decky/api";
@@ -34,6 +35,8 @@ const getStatus = callable<[], Status>("status");
 const doStart = callable<[], { ok: boolean; msg: string; status?: Status }>("start");
 const doStop = callable<[], { ok: boolean; msg: string; status?: Status }>("stop");
 const getLogs = callable<[number], { ok: boolean; text: string }>("logs");
+const getReplay = callable<[], { on: boolean }>("get_replay");
+const setReplay = callable<[boolean], { ok: boolean; on?: boolean }>("set_replay");
 
 function Row({ label, value, color }: { label: string; value: string; color?: string }) {
   return (
@@ -64,6 +67,14 @@ function Content() {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
   const [log, setLog] = useState("");
+  const [replay, setReplayOn] = useState(true);
+
+  const loadReplay = async () => {
+    try {
+      const r = await getReplay();
+      setReplayOn(!!r?.on);
+    } catch { /* 面板首帧拿不到就先显示默认开 */ }
+  };
 
   const refresh = async () => {
     try {
@@ -75,6 +86,7 @@ function Content() {
 
   useEffect(() => {
     refresh();
+    loadReplay();
     // 3 秒刷一次。模式检测要抓帧+读内存，约 0.3 秒，这个频率不碍事。
     const t = setInterval(refresh, 3000);
     return () => clearInterval(t);
@@ -133,6 +145,24 @@ function Content() {
           <ButtonItem layout="below" disabled={busy || !running} onClick={() => act(doStop)}>
             {busy && running ? "停止中…" : "关闭 bot"}
           </ButtonItem>
+        </PanelSectionRow>
+
+        <PanelSectionRow>
+          {/* 续局开关：写标记文件，bot 每次走到结算画面都重读，拨完下一局就生效 */}
+          <ToggleField
+            label="一局结束自动再来一局"
+            checked={replay}
+            onChange={async (v: boolean) => {
+              setReplayOn(v);
+              const r = await setReplay(v);
+              if (!r?.ok) {
+                setReplayOn(!v);
+                setMsg("开关写入失败: " + (r?.msg ?? ""));
+              } else {
+                setMsg(v ? "已开：一局结束自动点再来一次" : "已关：一局结束停在结算画面待命");
+              }
+            }}
+          />
         </PanelSectionRow>
 
         <PanelSectionRow>

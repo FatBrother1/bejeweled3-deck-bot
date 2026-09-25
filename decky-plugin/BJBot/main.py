@@ -67,7 +67,32 @@ def _pgrep(pattern):
     return [l for l in out.strip().splitlines() if l] if rc == 0 else []
 
 
+REPLAY_FLAG = "/home/deck/bjbot/autorestart"
+
+
 class Plugin:
+
+    # ── 续局开关（当局结束后是否自动点「再来一次」）──────
+    # 单一事实源 = /home/deck/bjbot/autorestart 标记文件（内容 1/0）。
+    # bot_v6 每次走到结算画面都会重读它 —— 面板上拨一下，下一局就生效。
+    async def get_replay(self):
+        on = True
+        try:
+            with open(REPLAY_FLAG) as f:
+                on = f.read().strip() == "1"
+        except Exception:
+            on = True          # 文件不存在 = 默认开（与旧守护行为一致）
+        return {"on": on}
+
+    async def set_replay(self, on: bool):
+        try:
+            os.makedirs(os.path.dirname(REPLAY_FLAG), exist_ok=True)
+            with open(REPLAY_FLAG, "w") as f:
+                f.write("1" if on else "0")
+            logger.info("续局开关 -> %s" % ("开" if on else "关"))
+            return {"ok": True, "on": bool(on)}
+        except Exception as e:
+            return {"ok": False, "msg": str(e)}
 
     async def _main(self):
         logger.info("BJBot 已加载；run2.sh 存在=%s" % os.path.exists(RUN2))

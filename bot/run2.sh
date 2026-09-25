@@ -23,7 +23,7 @@ STILL=250
 #   1 = 自动点（原守护默认行为）
 #   0 = 不做任何操作 —— bot 待命在结算画面，玩家手动开局后自动继续
 #   单次覆盖：AUTORESTART=0 ./run2.sh turbo    ；改默认值就直接改下面这行
-AUTORESTART=${AUTORESTART:-1}
+AUTORESTART=${AUTORESTART:-$(cat /home/deck/bjbot/autorestart 2>/dev/null || echo 1)}
 RSFLAG=""
 [ "$AUTORESTART" = "1" ] && RSFLAG="--auto-restart"
 case "${1:-help}" in

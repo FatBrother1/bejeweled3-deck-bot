@@ -81,16 +81,39 @@ const getStatus = callable("status");
 const doStart = callable("start");
 const doStop = callable("stop");
 const getLogs = callable("logs");
-function Line({ label, value, color }) {
-    return (SP_REACT.createElement("div", { style: { display: "flex", justifyContent: "space-between", fontSize: "13px", padding: "2px 0" } },
-        SP_REACT.createElement("span", { style: { opacity: 0.7 } }, label),
-        SP_REACT.createElement("span", { style: { fontWeight: 600, color: color ?? "#dcdedf" } }, value)));
+const getReplay = callable("get_replay");
+const setReplay = callable("set_replay");
+function Row({ label, value, color }) {
+    return (SP_REACT.createElement("div", { style: { display: "flex", justifyContent: "space-between", fontSize: "13px", padding: "2px 0", gap: "8px" } },
+        SP_REACT.createElement("span", { style: { opacity: 0.7, flexShrink: 0 } }, label),
+        SP_REACT.createElement("span", { style: {
+                fontWeight: 600, color: color ?? "#dcdedf",
+                textAlign: "right", wordBreak: "break-all", minWidth: 0,
+            } }, value)));
+}
+// 模式名的配色：牌局单独一色（它逻辑完全不同），菜单/未知灰，其余正常
+function modeColor(m) {
+    if (!m || m === "—" || m === "未知")
+        return "#8b929a";
+    if (m === "牌局")
+        return "#ffb74d";
+    if (m === "菜单")
+        return "#8b929a";
+    return "#59bf40";
 }
 function Content() {
     const [st, setSt] = SP_REACT.useState(null);
     const [busy, setBusy] = SP_REACT.useState(false);
     const [msg, setMsg] = SP_REACT.useState("");
     const [log, setLog] = SP_REACT.useState("");
+    const [replay, setReplayOn] = SP_REACT.useState(true);
+    const loadReplay = async () => {
+        try {
+            const r = await getReplay();
+            setReplayOn(!!r?.on);
+        }
+        catch { /* 面板首帧拿不到就先显示默认开 */ }
+    };
     const refresh = async () => {
         try {
             setSt(await getStatus());
@@ -101,6 +124,8 @@ function Content() {
     };
     SP_REACT.useEffect(() => {
         refresh();
+        loadReplay();
+        // 3 秒刷一次。模式检测要抓帧+读内存，约 0.3 秒，这个频率不碍事。
         const t = setInterval(refresh, 3000);
         return () => clearInterval(t);
     }, []);
@@ -121,23 +146,44 @@ function Content() {
         setBusy(false);
     };
     const running = !!st?.running;
-    const game = !!st?.game_running;
+    const gameOn = !!st?.game_running;
+    const mode = st?.mode ?? "—";
     return (SP_REACT.createElement(SP_REACT.Fragment, null,
         SP_REACT.createElement(DFL.PanelSection, { title: "Bejeweled 3 \u81EA\u52A8 bot" },
             SP_REACT.createElement(DFL.PanelSectionRow, null,
                 SP_REACT.createElement("div", { style: { width: "100%" } },
-                    SP_REACT.createElement(Line, { label: "bot", value: running ? "● 运行中" : "○ 已停止", color: running ? "#59bf40" : "#8b929a" }),
-                    SP_REACT.createElement(Line, { label: "\u6E38\u620F", value: game ? "运行中" : "未运行", color: game ? "#59bf40" : "#8b929a" }),
-                    SP_REACT.createElement(Line, { label: "\u5B88\u62A4", value: st ? (st.daemon === "active" ? "已启用" : "未启用") : "…" }))),
+                    SP_REACT.createElement(Row, { label: "\u72B6\u6001", value: running ? (gameOn ? "运行中" : "运行中（等游戏启动）") : "未启动", color: running ? "#59bf40" : "#8b929a" }),
+                    SP_REACT.createElement(Row, { label: "\u73B0\u6A21\u5F0F", value: gameOn ? mode : "游戏没开", color: gameOn ? modeColor(mode) : "#8b929a" }),
+                    SP_REACT.createElement(Row, { label: "\u8BC6\u522B\u65B9\u5F0F", value: st?.backend ?? "—" }),
+                    SP_REACT.createElement(Row, { label: "\u5DF2\u8D70\u6B65\u6570", value: running ? (st?.steps ?? "—") : "—" }),
+                    SP_REACT.createElement(Row, { label: "\u5DF2\u8FD0\u884C", value: running ? (st?.uptime ?? "—") : "—" }))),
             SP_REACT.createElement(DFL.PanelSectionRow, null,
                 SP_REACT.createElement(DFL.ButtonItem, { layout: "below", disabled: busy || running, onClick: () => act(doStart) }, busy && !running ? "启动中…" : "开启 bot")),
             SP_REACT.createElement(DFL.PanelSectionRow, null,
                 SP_REACT.createElement(DFL.ButtonItem, { layout: "below", disabled: busy || !running, onClick: () => act(doStop) }, busy && running ? "停止中…" : "关闭 bot")),
             SP_REACT.createElement(DFL.PanelSectionRow, null,
+                SP_REACT.createElement(DFL.ToggleField, { label: "\u4E00\u5C40\u7ED3\u675F\u81EA\u52A8\u518D\u6765\u4E00\u5C40", checked: replay, onChange: async (v) => {
+                        setReplayOn(v);
+                        const r = await setReplay(v);
+                        if (!r?.ok) {
+                            setReplayOn(!v);
+                            setMsg("开关写入失败: " + (r?.msg ?? ""));
+                        }
+                        else {
+                            setMsg(v ? "已开：一局结束自动点再来一次" : "已关：一局结束停在结算画面待命");
+                        }
+                    } })),
+            SP_REACT.createElement(DFL.PanelSectionRow, null,
                 SP_REACT.createElement("div", { style: { fontSize: "11px", opacity: 0.6, padding: "4px 0", lineHeight: 1.5, width: "100%" } },
-                    "\u5F00\u542F\u540E\u5E38\u9A7B\u5B88\u62A4\uFF1A\u6E38\u620F\u4E00\u5F00\u5C31\u81EA\u52A8\u8DD1\uFF0C\u9000\u51FA\u6E38\u620F\u5C31\u505C\u3002",
+                    "\u5F00\u542F\u540E\u5E38\u9A7B\u5B88\u62A4\uFF1A\u6E38\u620F\u4E00\u5F00\u5C31\u81EA\u52A8\u8DD1\uFF0C\u9000\u51FA\u6E38\u620F\u5C31\u505C\u3002 \u6A21\u5F0F\u7531 bot \u81EA\u5DF1\u8BA4\uFF08\u724C\u5C40\u4F1A\u51D1\u540C\u82B1\uFF0C\u5176\u5B83\u6A21\u5F0F\u6B63\u5E38\u6253\u5206\uFF09\uFF0C\u4E0D\u7528\u624B\u9009\u3002",
                     SP_REACT.createElement("br", null),
-                    "\u91CD\u542F Deck \u540E\u5931\u6548\uFF0C\u9700\u91CD\u65B0\u70B9\u4E00\u6B21\u300C\u5F00\u542F\u300D\u3002"))),
+                    "\u91CD\u542F Deck \u540E\u5931\u6548\uFF0C\u9700\u8981\u56DE\u6765\u518D\u70B9\u4E00\u6B21\u300C\u5F00\u542F\u300D\u3002"))),
+        SP_REACT.createElement(DFL.PanelSection, { title: "\u6B63\u5728\u8FD0\u884C\u7684\u811A\u672C" },
+            SP_REACT.createElement(DFL.PanelSectionRow, null,
+                SP_REACT.createElement("div", { style: { width: "100%" } },
+                    SP_REACT.createElement(Row, { label: "\u4E3B\u811A\u672C", value: st ? (st.script ?? "—") + (st.script_ok === false ? "（缺失！）" : "") : "…", color: st?.script_ok === false ? "#e05252" : undefined }),
+                    SP_REACT.createElement(Row, { label: "\u5B88\u62A4\u811A\u672C", value: st?.daemon_script ?? "—" }),
+                    st?.script_path && (SP_REACT.createElement("div", { style: { fontSize: "10px", opacity: 0.5, paddingTop: "2px", wordBreak: "break-all" } }, st.script_path))))),
         msg && (SP_REACT.createElement(DFL.PanelSection, null,
             SP_REACT.createElement(DFL.PanelSectionRow, null,
                 SP_REACT.createElement("div", { style: { color: "#ffb74d", fontSize: "12px", padding: "4px 0", width: "100%", wordBreak: "break-all" } }, msg)))),
