@@ -527,19 +527,33 @@ def main():
                 log("  ★ 钻石矿：泥土 %d 格（不可消不可换；消旁边的宝石自动挖开）" % nd)
             prev_nd = nd
             # ★★ 像素几何按模式选（本局第一次读盘时定；蝴蝶可能晚一拍出现，允许开头纠正）★★
+            #   牌局   ⇒ board_poker.json（--mode poker 直接定）
             #   有泥土 ⇒ 钻石矿 ⇒ board_diamond.json
             #   有蝴蝶 ⇒ 蝴蝶模式 ⇒ board_butterfly.json
             #   其余   ⇒ 经典/禅意 ⇒ board.json
             #   ★ 2026-09-26：蝴蝶模式棋盘比经典低约 58px、格距更小（实测标定）。
             #     用错几何时第 0~2 行的拖动会落到棋盘外、被游戏拒 —— 实测旧几何 0/4、
             #     新几何 6/6。症状就是"走法全被拒 + 反复拉黑 + 停手"。
+            #   ★ 2026-09-26 再补：牌局模式也是同一回事。它和钻石矿/蝴蝶同属
+            #     "现代版式"（格距 85.25），但原点又不同（x0=482.5 y0=113）。
+            #     一直用经典几何 ⇒ 采样只命中 44/64 格 ⇒ 规划出的走法落到别的
+            #     格子上被拒 ⇒ 实测 61% 的交换被判"被拒"（全拉黑 + 停手）。
+            #     标定后 64/64、总色距 1725（经典 5513）。
             _bf_now = bool((rd.last_extra or {}).get("butterflies"))
-            _want = "diamond" if nd > 0 else ("butterfly" if _bf_now else "classic")
-            if geo_key is None or (geo_key == "classic" and _want == "butterfly"):
+            if a.mode == "poker":
+                _want = "poker"
+            elif nd > 0:
+                _want = "diamond"
+            elif _bf_now:
+                _want = "butterfly"
+            else:
+                _want = "classic"
+            if geo_key is None or (geo_key == "classic" and _want != "classic"):
                 geo_key = _want
                 _g = geo_for(geo_key)
                 set_geo(_g)
                 _why = {"diamond": "  ← 钻石矿格子比经典低约 54px，用错会点错格",
+                        "poker": "  ← 牌局棋盘格距 85.25、原点与经典差 34px，用错会点错格",
                         "butterfly": "  ← 蝴蝶模式棋盘比经典低约 58px、格距更小，用错会点错格",
                         }.get(geo_key, "")
                 log("  像素几何: %s  x0=%.0f y0=%.0f px=%.2f py=%.2f%s"
@@ -676,6 +690,11 @@ def main():
                     continue
             for (i, j), n in list(blacklist.items()):
                 if n >= 3: g[i][j] = "?"
+            # ★ 2026-09-26 修：`tgset` 只在【普通模式分支】里赋值（闪电修复
+            #   de8149a 引入），牌局分支从不赋值 ⇒ 牌局模式第一步被拒就
+            #   `UnboundLocalError` 崩掉（实测 1 步即 traceback）。
+            #   这里给一个每轮默认值，普通分支照旧覆盖它。最小修复，不动别的。
+            tgset = set()
             if a.engine == "fast":
                 try:
                     import solver_fast
@@ -726,9 +745,15 @@ def main():
                         if dead >= 30: break
                         time.sleep(1.0); continue
                     t = rk[0]; pred = t[1]; (i1, j1), (i2, j2) = t[5], t[6]
-                    log("  手牌 %s  目标色=%s  牌型=%s  消目标色=%d%s"
+                    # ★ 2026-09-26：日志带上"同花还活着没有"和选色理由 ——
+                    #   以前只写目标色，看不出这手同花其实早就死了。
+                    _alive, _lk, _need = pk.flush_state(hand)
+                    log("  手牌 %s  目标色=%s  牌型=%s  消目标色=%d%s  [%s]"
                         % ("".join(hand), solver_poker.get_last_target(),
-                           hv[0], t[8], "  ★目标色为多数色" if len(t) > 9 and t[9] else ""))
+                           hv[0], t[8],
+                           "  ★严格多数" if len(t) > 10 and t[10] else "",
+                           ("同花活·还差%d" % _need) if _alive and _lk
+                           else ("同花活·未定色" if _alive else "同花已死")))
             else:
                 # ★ 闪电模式：把时间宝石位置喂给求解器，让它优先去消。
                 #   限时模式里不拿时间宝石就必死 —— 实测标记是
@@ -867,7 +892,14 @@ def main():
             #   $48,000 而 Board+0xD24 读 0），所以只能靠"棋盘变了"判；
             #   但必须再叠一条 swapped（我们拖的那两格确实变了），
             #   否则无关变化会把被拒的招洗白。
-            if nd > 0:
+            # ★★ 2026-09-26：牌局模式与钻石矿是同一类问题 ★★
+            #   牌局里消除宝石【不给分】—— 分数只在凑成牌型时结算。
+            #   用"分数变了没有"判有效性 ⇒ 每一步真有效的交换都被判"被拒"
+            #   ⇒ 全拉黑 → 掩码棋盘 → 每 12 步停手等 20 秒。
+            #   实测症状：0.36 步/秒、手牌 20 秒不涨、日志满屏 `✗拉黑`，
+            #   而手牌其实在长（G???? → GG??? → GR??? 都是这么来的）。
+            #   和钻石矿一样，只能靠"棋盘变了 + 拖动的那两格确实变了"判。
+            if nd > 0 or a.mode == "poker":
                 effective = bool(changed and swapped)
             else:
                 effective = (real is not None and real != 0)

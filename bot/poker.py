@@ -181,6 +181,29 @@ def best_flush_color(hand):
     return cands[0] if len(cands) == 1 else cands
 
 
+def flush_state(hand):
+    """★ 2026-09-26：这手牌还能不能追同花。
+
+    手牌是【从左往右填】的，已翻开的永远是一段前缀（'?' = 还没拿到的空位，
+    不是暗牌）。同步抓帧实测序列：
+
+        G???? → GG??? → GR??? → GRR?? → GRG?? → GRGG? → GRGOR → GRGOO（结算）
+        ????? → （新一手，重新从左边填）
+
+    同花要求 5 张同色 ⇒ **只要已翻开里出现了第二种颜色，这手同花就已经死了**，
+    再追是白费（原来的 best_flush_color 不管这个，`GRGO?` 还在追 G）。
+
+    返回 (还能不能追, 锁定的目标色, 还差几张)。
+    手牌全空时返回 (True, None, 5) —— 目标色还没定，交给求解器按盘面选。
+    """
+    vals = [c for c in (hand or []) if c and c != "?"]
+    if not vals:
+        return (True, None, 5)
+    if len(set(vals)) == 1:
+        return (True, vals[0], 5 - len(vals))
+    return (False, None, 0)
+
+
 # 各牌型的骷髅风险：(骷髅生成率, 必定生成骷髅的手数)
 SKULL_RISK = {
     "一对":   (0.10, 10),
