@@ -143,10 +143,28 @@ class Plugin:
                     pass
 
         # ② 跑的是哪个脚本
+        #   ★ 2026-09-26 模式脚本化：守护按 which_mode.py 检测到的模式拉起
+        #     bot_<mode>.py，所以面板必须显示【实际在跑的那个】，
+        #     不能再写死成 bot_v6.py（那样这栏永远是同一个名字、等于没信息）。
         st["script"] = os.path.basename(BOT_SCRIPT)
         st["script_path"] = BOT_SCRIPT
         st["script_ok"] = os.path.exists(BOT_SCRIPT)
         st["daemon_script"] = os.path.basename(WATCH_SCRIPT)
+        #   ★ 必须用 pgrep -af（带命令行）：`_pgrep` 那个只给 PID，
+        #     拿它去找 .py 永远找不到，面板会一直显示默认的 bot_v6.py。
+        try:
+            _rc_s, _out_s = _run(["/usr/bin/pgrep", "-af",
+                                  "python3 /home/deck/bo[t]_"], timeout=8)
+            if _rc_s == 0:
+                for _line in _out_s.strip().splitlines():
+                    for _tok in _line.split():
+                        if _tok.endswith(".py") and "/home/deck/" in _tok:
+                            st["script"] = os.path.basename(_tok)
+                            st["script_path"] = _tok
+                            st["script_ok"] = os.path.exists(_tok)
+                            break
+        except Exception:
+            pass
 
         # ③ 识别后端：从 bot 日志抓（它会打"后端自动选择: 内存/视觉"）
         #    没跑过就是"—"

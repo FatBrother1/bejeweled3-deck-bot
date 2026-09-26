@@ -18,6 +18,12 @@ from reader_fast import FastReader
 from vmouse2 import VMouse2
 from vision_np import BOARD
 import solver_pro
+# ★★ 2026-09-26：模式脚本化 ★★
+#   每个模式一个文件（modes/<key>.py），各自声明几何、有效判据、选步、检测。
+#   引擎只认 modes 这套接口，不再把"哪个模式怎么办"写死在 if 链里 ——
+#   牌局那次就是死在共享分支上的（钻石矿那条分支没覆盖到它）。
+#   加新模式 = modes/ 里加个文件 + 注册表里加个名字，本文件不用动。
+import modes
 
 SCORE_ADDRS = [0x0a1de408, 0x2a542394, 0x2a5423d4]
 
@@ -132,6 +138,40 @@ def detect_mode(frame):
     if ratio > 0.20:
         return "poker"          # 有整块绿色分值表 ⇒ 牌局
     return "normal"
+
+
+def select_mode(cur, ctx):
+    """选本步生效的模式（粘性规则）。
+
+    检测本身是每步都做的（泥土、蝴蝶、时间宝石随时会出现/消失），但**模式一旦
+    认出来就粘住**，否则某一帧没读到蝴蝶就会掉回经典，几何跟着来回抖。
+
+    允许跟着走的只有两个：
+      · classic —— 它是兜底模式，随时可以被更有特征的模式顶掉；
+      · poker   —— 它靠画面判据（hint），玩家进出牌局要能跟着变。
+    钻石矿/蝴蝶/闪电一旦认领就粘住，跟原来 geo_key 的规则完全一致。
+    """
+    want = modes.detect(ctx)
+    if cur is None or want.KEY == cur.KEY:
+        return want
+    if cur.KEY in ("classic", "poker"):
+        return want
+    return cur
+
+
+def grab_frame(rd):
+    """再抓一帧画面（牌局读手牌用）。
+
+    为什么需要：走 pending 复用那条路时 `fr_iter` 是 None，而牌局每一步都要
+    看手牌决定追哪个花色。这时直接从抓帧器再取一帧，最多等 0.5 秒。
+    """
+    cap = getattr(rd, "cap", None)
+    if cap is None:
+        return None
+    try:
+        return cap.get(timeout=0.5)
+    except Exception:
+        return None
 
 
 def board_alive():
@@ -280,10 +320,11 @@ def main():
     ap.add_argument("--death-shot", metavar="DIR",
                     help="检测到游戏结束时把画面连拍到 DIR（用于标定按钮位置）")
     ap.add_argument("--mode", default="auto",
-                    choices=["auto", "normal", "poker"],
-                    help="游戏模式：auto=自动识别（默认，看左侧面板是不是绿色分值表）；"
-                         "normal=普通（每次消除都给分）；"
-                         "poker=牌局（只有集齐5张牌型才给分，优先凑同花）")
+                    choices=["auto", "normal"] + modes.keys(),
+                    help="游戏模式：auto=自动识别（默认，牌局看左侧绿色分值表，"
+                         "其余按棋盘特征）；也可以直接点名下面这些之一，"
+                         "点名就不猜了（modes/ 里一个模式一个文件）：%s"
+                         % "、".join(modes.keys()))
     a = ap.parse_args()
     a.mode_auto = (a.mode == "auto")     # 记下是不是自动模式（后面 a.mode 会被改写）
     cap = PwCapture()
@@ -319,29 +360,37 @@ def main():
     log("=== bot v6 engine=%s vision=%s still=%.0fms pid=%s 起始分=%s ===" % (
         a.engine, a.vision, a.still_ms, PID, s0))
     done = 0; ok_n = 0; dead = 0; miss = 0; t0 = time.time()
-    # ★ 牌局模式：每步都要看手牌决定追哪个花色
-    pk = None
-    import poker as _pk
-    pk = _pk
-    if a.mode == "auto":
-        # 先用当前画面识别一次
+    # ★★ 模式选择（2026-09-26 脚本化）★★
+    #   引擎不认识具体模式：它只构造一个 ctx 交给 modes 注册表，由注册表按顺序
+    #   问每个模式"这一帧是不是你"。牌局由画面判据给 hint（最准），钻石矿/蝴蝶/
+    #   闪电靠棋盘特征，经典兜底。
+    fr0 = None
+    try:
+        fr0 = cap.get(timeout=1.0)
+    except Exception:
         fr0 = None
-        try:
-            fr0 = cap.get(timeout=1.0)
-        except Exception:
-            fr0 = None
+    hint0 = None
+    if a.mode == "auto":
         dm = detect_mode(fr0)
-        if dm:
-            a.mode = dm
-            log("  自动识别模式: %s（%s）"
-                % ("牌局" if dm == "poker" else "普通",
-                   "左侧有绿色分值表" if dm == "poker"
-                   else "左侧没有分值表 ⇒ 按普通逻辑跑"))
+        if dm == "poker":
+            hint0 = "poker"
+            log("  自动识别模式: 牌局（左侧有绿色分值表）")
         else:
-            a.mode = "normal"
-            log("  ⚠️ 模式识别不了（可能还在菜单/转场），暂用普通模式，"
-                "运行中会继续识别")
-    if a.mode == "poker":
+            log("  自动识别模式: 普通（左侧没有分值表 ⇒ 按普通逻辑跑，"
+                "运行中继续认棋盘特征）")
+    elif a.mode == "normal":
+        log("  点名模式: 普通（不自动识别）")
+    else:
+        hint0 = a.mode
+        log("  点名模式: %s（不自动识别）" % a.mode)
+    mode = modes.detect({"hint": hint0, "extra": getattr(rd, "last_extra", None),
+                         "nd": 0, "frame": fr0})
+    # 牌局的画面 hint 跟原来一样是【粘性】的：只在启动和每 20 步复查时更新。
+    # 不逐帧重算 —— 消除动画里那几帧 detect_mode 会失手，逐帧重算会让牌局
+    # 来回掉进经典再掉回来（原实现也是这个粘法）。
+    hint_now = hint0
+    log("  载入模式脚本: modes/%s.py（%s）" % (mode.KEY, mode.NAME))
+    if mode.KEY == "poker":
         log("  牌局模式：优先凑同花（同花 50000 分，是第二名的 1.67 倍）")
     rows = []; tw = 0.0; tv = 0.0; td = 0.0
     blacklist = {}
@@ -350,6 +399,7 @@ def main():
     pending = None
     prev_fp = None          # ★ 死局时检测洗牌用
     prev_nd = 0             # ★ 钻石矿泥土格数（变化沿触发日志）
+    nd = 0                  # ★ 本步泥土格数（模式检测要用；每步重算）
     cs_prev = None          # ★ 游戏时钟采样（钻石矿结束检测用）
     cs_frozen = 0           # ★ 时钟连续冻结采样数
     cs_live_marked = False  # ★ 本进程已写过活跃标记
@@ -473,12 +523,15 @@ def main():
             # ★ auto 模式：运行中每 20 步复查一次（玩家可能中途换了模式）
             if a.mode_auto and done > 0 and done % 20 == 0 and fr_iter is not None:
                 dm2 = detect_mode(fr_iter)
-                if dm2 and dm2 != a.mode:
-                    log("  ★ 模式变了：%s → %s"
-                        % ("牌局" if a.mode == "poker" else "普通",
-                           "牌局" if dm2 == "poker" else "普通"))
-                    a.mode = dm2
-                    if dm2 == "poker":
+                hint_now = "poker" if dm2 == "poker" else None
+                _m2 = select_mode(mode, {"hint": hint_now,
+                                         "extra": rd.last_extra, "nd": nd,
+                                         "frame": fr_iter})
+                if _m2.KEY != mode.KEY:
+                    log("  ★ 模式变了：%s → %s（载入 modes/%s.py）"
+                        % (mode.NAME, _m2.NAME, _m2.KEY))
+                    mode = _m2
+                    if mode.KEY == "poker":
                         log("  牌局模式：优先凑同花")
                     dead = 0
                     pending = None
@@ -526,38 +579,24 @@ def main():
             if nd and not prev_nd:
                 log("  ★ 钻石矿：泥土 %d 格（不可消不可换；消旁边的宝石自动挖开）" % nd)
             prev_nd = nd
-            # ★★ 像素几何按模式选（本局第一次读盘时定；蝴蝶可能晚一拍出现，允许开头纠正）★★
-            #   牌局   ⇒ board_poker.json（--mode poker 直接定）
-            #   有泥土 ⇒ 钻石矿 ⇒ board_diamond.json
-            #   有蝴蝶 ⇒ 蝴蝶模式 ⇒ board_butterfly.json
-            #   其余   ⇒ 经典/禅意 ⇒ board.json
-            #   ★ 2026-09-26：蝴蝶模式棋盘比经典低约 58px、格距更小（实测标定）。
-            #     用错几何时第 0~2 行的拖动会落到棋盘外、被游戏拒 —— 实测旧几何 0/4、
-            #     新几何 6/6。症状就是"走法全被拒 + 反复拉黑 + 停手"。
-            #   ★ 2026-09-26 再补：牌局模式也是同一回事。它和钻石矿/蝴蝶同属
-            #     "现代版式"（格距 85.25），但原点又不同（x0=482.5 y0=113）。
-            #     一直用经典几何 ⇒ 采样只命中 44/64 格 ⇒ 规划出的走法落到别的
-            #     格子上被拒 ⇒ 实测 61% 的交换被判"被拒"（全拉黑 + 停手）。
-            #     标定后 64/64、总色距 1725（经典 5513）。
-            _bf_now = bool((rd.last_extra or {}).get("butterflies"))
-            if a.mode == "poker":
-                _want = "poker"
-            elif nd > 0:
-                _want = "diamond"
-            elif _bf_now:
-                _want = "butterfly"
-            else:
-                _want = "classic"
+            # ★★ 像素几何按模式选（本局第一次读盘时定；允许开头纠正）★★
+            #   ★ 2026-09-26 脚本化：几何不再是引擎里的一张 if 表，而是每个模式
+            #     文件自己声明的 GEO —— 引擎只负责"本步是哪个模式"。
+            #   三个非经典几何都是实测踩出来的（用错就点错格、走法全被拒）：
+            #     蝴蝶 棋盘低约 58px、格距 85.32/84.84（旧几何 0/4 → 新 6/6）
+            #     钻石矿 低约 54px（格距 85.25/84.50）
+            #     牌局 格距 85.25、原点又不同（x0=482.5 y0=113）
+            #          旧几何采样只命中 44/64 格 → 61% 的交换被判"被拒"
+            mode = select_mode(mode, {"hint": hint_now, "extra": rd.last_extra,
+                                      "nd": nd, "frame": fr_iter})
+            _want = mode.GEO
             if geo_key is None or (geo_key == "classic" and _want != "classic"):
                 geo_key = _want
                 _g = geo_for(geo_key)
                 set_geo(_g)
-                _why = {"diamond": "  ← 钻石矿格子比经典低约 54px，用错会点错格",
-                        "poker": "  ← 牌局棋盘格距 85.25、原点与经典差 34px，用错会点错格",
-                        "butterfly": "  ← 蝴蝶模式棋盘比经典低约 58px、格距更小，用错会点错格",
-                        }.get(geo_key, "")
                 log("  像素几何: %s  x0=%.0f y0=%.0f px=%.2f py=%.2f%s"
-                    % (geo_key, _g["x0"], _g["y0"], _g["pitch_x"], _g["pitch_y"], _why))
+                    % (geo_key, _g["x0"], _g["y0"], _g["pitch_x"], _g["pitch_y"],
+                       mode.GEO_WHY))
             # ★ 钻石矿计时结束检测（每局 1:30）：结束画面不是标准橙色结算
             #   面板，像素判不出 —— 但游戏时钟会停。判据：有泥 + cs>0（本局
             #   确实开始过）+ 时钟冻结满 8 次采样（约 20 秒；对局中时钟从不
@@ -582,7 +621,11 @@ def main():
                             pass
                         cs_live_marked = True
                 cs_prev = cs
-                if cs_frozen >= 8 and nd > 0 and cs > 0 and marker_live():
+                # 时钟冻满阈值时问一句模式："这是本局结束，还是失焦暂停？"
+                # 原来写死 nd>0（只有钻石矿），现在钻石矿自己认领，
+                # 其余模式一律落到下面的通用自愈分支。
+                if cs_frozen >= 8 and mode.settles_on_clock_freeze(
+                        {"nd": nd, "cs": cs, "marker_live": marker_live}):
                     try:
                         os.remove(CS_LIVE)
                     except Exception:
@@ -711,118 +754,29 @@ def main():
                         blacklist.clear(); g = [r[:] for r in g_raw]
                 if mv is None: dead += 1; time.sleep(0.8); continue
                 _, _, (i1, j1), (i2, j2) = mv; pred = 0
-            elif a.mode == "poker":
-                # ★ 牌局模式：先读手牌，据此定目标花色
-                fr = fr_iter
-                if fr is None and getattr(rd, "cap", None) is not None:
-                    try:
-                        fr = rd.cap.get(timeout=0.5)
-                    except Exception:
-                        fr = None
-                hand = pk.read_hand(fr) if fr is not None else None
-                known = [c for c in (hand or []) if c != "?"]
-                import solver_poker
-                # ★ 骷髅机制下的纪律：能凑同花就追同花（同花永不生成骷髅），
-                #   已有 3~4 张同色更要忍住不打出低阶牌型。
-                hv = pk.hand_value(hand)
-                # 注：手牌满 5 张会自动结算，玩家只能通过"消哪种颜色"来影响牌型。
-                #     所以这里不做"忍住不打"（那是无效操作），
-                #     而是由 solver_poker 死盯目标色。
-                if not known:
-                    # 手牌全背面：没有花色信息。这时也【不能】乱打 ——
-                    # 随便凑出的低阶牌型会累积骷髅。仅在别无选择时按普通评分走。
-                    rk = solver_pro.rank_moves(g, banned=banned | banned_sticky)
-                    if not rk:
-                        dead += 1
-                        if dead >= 30: break
-                        time.sleep(1.0); continue
-                    t = rk[0]; pred = t[1]; (i1, j1), (i2, j2) = t[6], t[7]
-                else:
-                    rk = solver_poker.rank_moves_poker(g, hand=hand, topk=10)
-                    if not rk:
-                        dead += 1
-                        log("  牌局无走法(%d)等洗牌..." % dead)
-                        if dead >= 30: break
-                        time.sleep(1.0); continue
-                    t = rk[0]; pred = t[1]; (i1, j1), (i2, j2) = t[5], t[6]
-                    # ★ 2026-09-26：日志带上"同花还活着没有"和选色理由 ——
-                    #   以前只写目标色，看不出这手同花其实早就死了。
-                    _alive, _lk, _need = pk.flush_state(hand)
-                    log("  手牌 %s  目标色=%s  牌型=%s  消目标色=%d%s  [%s]"
-                        % ("".join(hand), solver_poker.get_last_target(),
-                           hv[0], t[8],
-                           "  ★严格多数" if len(t) > 10 and t[10] else "",
-                           ("同花活·还差%d" % _need) if _alive and _lk
-                           else ("同花活·未定色" if _alive else "同花已死")))
             else:
-                # ★ 闪电模式：把时间宝石位置喂给求解器，让它优先去消。
-                #   限时模式里不拿时间宝石就必死 —— 实测标记是
-                #   flags & 131072（COUNTER 位），计数在 Piece+0x244。
-                tg = (rd.last_extra or {}).get("timegems") or []
-                if tg:
-                    log("  ⏱ 时间宝石 %d 个: %s"
-                        % (len(tg), ", ".join("(%d,%d)+%d" % t for t in tg)))
-                # ★ 特殊宝石状态位（2026-09-26 新增）：火焰1 超立方2 闪电4 超新星5。
-                #   数据本来就在每次读盘的 extra["flags"] 里，白拿 —— 交给求解器
-                #   模拟它们的引爆范围（火焰 3×3、闪电整行整列、超新星叠加、链式引爆）。
-                #   实测：70% 的帧盘面上有特殊宝石，接进去以后 1/3 的帧首选招会变，
-                #   且都是变成"引爆特殊宝石"那一步。
-                fl = {(i, j): f for (i, j, f) in
-                      ((rd.last_extra or {}).get("flags") or [])
-                      if f in (1, 2, 4, 5)}
-                # ★ 蝴蝶模式（2026-09-26）：蝴蝶宝石 = 状态位 128。
-                #   蝴蝶从底下出现、逐格往上飞，**飞到顶行这局就结束** ——
-                #   所以"能消掉蝴蝶"的招必须压倒性优先（求解器按 8-行号 加紧急度）。
-                bf = (rd.last_extra or {}).get("butterflies") or []
-                if bf and len(bf) != prev_nbf:
-                    log("  🦋 蝴蝶 %d 只: %s  ← 飞到顶行就结束，优先消"
-                        % (len(bf), ", ".join("(%d,%d)" % p for p in bf)))
-                    prev_nbf = len(bf)
-                rk = solver_pro.rank_moves(g, timegems=tg,
-                                           banned=banned | banned_sticky,
-                                           flags=fl, butterflies=bf)
-                # ★★ 拉黑掩码会掩出"假死局"（2026-09-26 实测）★★
-                #   被拉黑 3 次的格子会被上面改写成 '?'，而 '?' 不但自己不能连线，
-                #   还会**切断别人的连线**。钻石矿挖深以后有效走法本来就少，
-                #   几个掩码就足以把真棋盘掩成 0 候选 ⇒ bot 判定"死局"、就地待命，
-                #   看起来就是用户报的"挖到一定深度就不工作了"。
-                #   实测现场（00:54，金币 $327,000）：掩码版候选 0，真实棋盘候选 2
-                #   —— (2,3)<->(3,3)、(3,3)<->(4,3)，后者靠第 2 列 R,R,R 成三连，
-                #   正是被 (2,3)=? 切断的。
-                #   处理：0 候选且确有掩码时，用真实棋盘重算一次；有候选就说明
-                #   是掩码造成的，清空拉黑按真实棋盘走。
-                if not rk and blacklist:
-                    rk_raw = solver_pro.rank_moves(g_raw, timegems=tg,
-                                                   banned=banned | banned_sticky,
-                                                   flags=fl, butterflies=bf)
-                    if rk_raw:
-                        log("  ★ 拉黑掩码掩出了假死局 → 清空拉黑，按真实棋盘走"
-                            "（候选 %d，掩码格 %d）" % (len(rk_raw), len(blacklist)))
-                        blacklist.clear()
-                        g = [r[:] for r in g_raw]
-                        rk = rk_raw
-                # ★★ 最后一道兜底：连"走法级拉黑"也不带，纯问一句"这盘还有没有合法交换"
-                #   （2026-09-26，通用三消文档 §5.1 的 hasAnyMove 思路）。
-                #   被游戏拒过的招会被 banned 挡掉；若所有合法招恰好都被挡掉，
-                #   上面两步都救不回来，仍会假死局。解禁重试有 stall 保护兜着
-                #   （连续被拒会自动停手等待），所以不会退化成"重复点击空转"。
-                #   ★★ 2026-09-26 修：这一层以前用 g（掩码版）⇒ 掩码把候选杀光时
-                #   解 ban 也救不回来（实测蝴蝶模式里 3 个合法走法全涉及被掩码的
-                #   (1,1)，于是 0 候选、趴窝 15 分钟）。必须用 g_raw。
-                if not rk and (banned or banned_sticky):
-                    rk_free = solver_pro.rank_moves(g_raw, timegems=tg, banned=set(),
-                                                    flags=fl, butterflies=bf)
-                    if rk_free:
-                        log("  ★ 合法走法全被拉黑 → 解禁重算（候选 %d，原 ban %d 条，"
-                            "掩码格 %d）"
-                            % (len(rk_free), len(banned) + len(banned_sticky),
-                               len(blacklist)))
-                        banned.clear(); banned_sticky.clear()
-                        blacklist.clear()
-                        g = [r[:] for r in g_raw]
-                        rk = rk_free
-                if not rk:
+                # ★★ 选步交给模式脚本（2026-09-26 脚本化）★★
+                #   以前这里是一条 if 链（牌局 / 其余）。现在引擎只构造 ctx，
+                #   怎么选由 modes/<key>.py 决定 —— 某个模式的修复只会落在它
+                #   自己的文件里，不会再漏在别人的分支外（牌局就是这么坏的：
+                #   钻石矿那条分支没覆盖到它）。
+                ctx = {"g": g, "g_raw": g_raw, "blacklist": blacklist,
+                       "banned": banned, "banned_sticky": banned_sticky,
+                       "extra": rd.last_extra, "nd": nd, "frame": fr_iter,
+                       "log": log, "bad": bad, "dead": 0,
+                       "get_frame": (lambda: grab_frame(rd))}
+                res = mode.choose(ctx)
+                g = ctx["g"]; g_raw = ctx["g_raw"]   # 模式可能换过棋盘、清过拉黑
+                if res is None:
                     dead += 1
+                    ctx["dead"] = dead
+                    if mode.DEAD_EXIT_AT is not None:
+                        # 模式自己管死局（牌局：打一行、等 1 秒、满 30 次退出）
+                        mode.on_no_move(ctx)
+                        if dead >= mode.DEAD_EXIT_AT:
+                            break
+                        time.sleep(1.0); continue
+                    # 普通模式：打印死局现场，就地待命、不退出
                     fp_dead = rd.mod.fingerprint(g)
                     if fp_dead != prev_fp:
                         # 棋盘自己变了（游戏洗牌/换盘）→ 旧拉黑全部作废
@@ -830,8 +784,10 @@ def main():
                     prev_fp = fp_dead
                     if dead <= 2:
                         # ★ 死局现场诊断：棋盘明明读得到却没有候选 —— 打印看看
-                        log("  死局现场 bad=%s banned=%d sticky=%d tg=%s 棋盘:"
-                            % (bad, len(banned), len(banned_sticky), tg))
+                        #   （原来的 tg=%s 那项去掉了：时间宝石现在是模式内部
+                        #     的事，引擎不再持有它）
+                        log("  死局现场 bad=%s banned=%d sticky=%d 棋盘:"
+                            % (bad, len(banned), len(banned_sticky)))
                         for row in g:
                             log("    " + " ".join(row))
                     if dead % 30 == 0:
@@ -839,13 +795,12 @@ def main():
                     if dead >= 30:
                         # ★ 长死局就地待命，不退出 —— 退出会被守护立刻拉起，
                         #   又对着同一块冻结盘打一轮（实测 crash-loop）。
-                        #   结算/时钟检测每轮照跑，新局一来自动恢复。
                         time.sleep(1.0); continue
                     time.sleep(1.0); continue
-                t = rk[0]; pred = t[1]; (i1, j1), (i2, j2) = t[6], t[7]
-                tgset = set((i, j) for i, j, _ in tg)
-                if tgset and ((i1, j1) in tgset or (i2, j2) in tgset):
-                    log("  ★ 这一步直接拿时间宝石")
+                pred = res["pred"]
+                (i1, j1), (i2, j2) = res["cells"]
+                tgset = res.get("tgset") or set()
+                mode.on_picked(ctx, res)
             dead = 0
             # ★ f0 必须取【原始棋盘】的指纹（g 已被上面的拉黑改写成 '?'）——
             #   2026-09-25 实测的坑：只要有格子被拉黑成 '?'，f0 就永远和
@@ -899,7 +854,11 @@ def main():
             #   实测症状：0.36 步/秒、手牌 20 秒不涨、日志满屏 `✗拉黑`，
             #   而手牌其实在长（G???? → GG??? → GR??? 都是这么来的）。
             #   和钻石矿一样，只能靠"棋盘变了 + 拖动的那两格确实变了"判。
-            if nd > 0 or a.mode == "poker":
+            # ★ 2026-09-26 脚本化：判据由模式自己声明（EFFECTIVE）。
+            #   "board" = 靠棋盘变化判 —— 钻石矿的分数在内存里读不到、
+            #             牌局消除宝石不给分（分数只在凑成牌型时结算）；
+            #   "score" = 靠分数变化判 —— 其余模式。
+            if mode.EFFECTIVE == "board":
                 effective = bool(changed and swapped)
             else:
                 effective = (real is not None and real != 0)

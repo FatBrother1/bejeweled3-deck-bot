@@ -49,6 +49,19 @@ case "${1:-help}" in
       echo "续局: AUTORESTART=$AUTORESTART ($([ "$AUTORESTART" = 1 ] && echo 当局结束自动点再来一次 || echo 当局结束待命不操作))"
       ;;
   logs)   tail -n "${2:-30}" /home/deck/bjbot/bot.out ;;
+  modes)  echo "认得的模式（modes/ 里一个模式一个文件）："
+          for f in /home/deck/bot_*.py; do
+            [ -e "$f" ] || continue
+            m=$(basename "$f" .py); m=${m#bot_}
+            [ "$m" = "v6" ] && continue
+            echo "    $m"
+          done
+          echo "  用法: ./run2.sh run <模式> [步数]   # 不写模式=自动识别" ;;
+  run)    M="${2:-auto}"
+          if [ "$M" = "auto" ]; then S=/home/deck/bot_v6.py; A="--mode auto";
+          else S="/home/deck/bot_$M.py"; A=""; fi
+          if [ ! -f "$S" ]; then echo "没有这个模式的脚本: $S"; exit 1; fi
+          exec python3 "$S" $A --engine pro --vision mem --still-ms $STILL $RSFLAG --moves "${3:-0}" ;;
   play)   exec python3 $BOT --engine pro --vision mem --mode auto --still-ms $STILL $RSFLAG --moves "${2:-0}" ;;
   turbo)  exec python3 $BOT --engine pro --vision mem --mode auto --still-ms $STILL $RSFLAG --moves "${2:-0}" ;;
   dry)    exec python3 $BOT --engine pro --vision mem --mode auto --still-ms $STILL --no-click --moves "${2:-3}" ;;

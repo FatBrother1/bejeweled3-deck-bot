@@ -73,11 +73,24 @@ sys.exit(1 if "@@DSHROOT@@" in data else 0)
 PY
   echo "   → $f"
 }
-for f in bot_v6.py reader_fast.py capture_pw.py vision_np.py solver_pro.py vmouse2.py watch2.py run2.sh; do
+# ★ 2026-09-26 模式脚本化：bot_v6.py 现在 import modes 这个包，
+#   而且守护会按检测到的模式拉起 bot_<模式>.py —— 这两样都必须装。
+for f in bot_v6.py \
+         bot_classic.py bot_zen.py bot_lightning.py bot_icescape.py \
+         bot_butterfly.py bot_diamond.py bot_poker.py bot_quest.py \
+         reader_fast.py capture_pw.py vision_np.py solver_pro.py vmouse2.py \
+         watch2.py run2.sh; do
   copy_one "$f"
 done
 chmod +x "$TARGET/run2.sh"
 echo "   → run2.sh (已加可执行权限)"
+# ★ 模式包：一个模式一个文件。不拷它 bot 起不来
+#   （ImportError: No module named 'modes'）—— 这一条是硬依赖。
+mkdir -p "$TARGET/modes"
+for f in modes/*.py; do
+  cp "$f" "$TARGET/modes/"
+  echo "   → $f"
+done
 # board.json 只在目标没有时复制（避免覆盖用户自己的标定）
 if [ -f "$TARGET/bjbot/board.json" ]; then
   echo "   → board.json 已存在，保留不覆盖（保护你的标定）"
@@ -85,15 +98,21 @@ else
   cp board.json "$TARGET/bjbot/board.json"
   echo "   → bjbot/board.json"
 fi
-# ★ 钻石矿的棋盘格子位置和经典/禅意不一样（低约 54px），单独一份标定
-if [ -f board_diamond.json ]; then
-  if [ -f "$TARGET/bjbot/board_diamond.json" ]; then
-    echo "   → board_diamond.json 已存在，保留不覆盖"
+# ★ 每个模式自己的棋盘标定 —— 格子位置不一样，用错就会点错格、走法全被拒：
+#     钻石矿 比经典低约 54px（格距 85.25/84.50）
+#     蝴蝶   比经典低约 58px、格距 85.32/84.84
+#     牌局   格距 85.25、原点又不同（x0=482.5 y0=113）
+#   ★ 2026-09-26 补：蝴蝶和牌局这两份原来漏在安装脚本外，全新装的机器上
+#     这两个模式会退回经典几何，等于坏掉。
+for b in board_diamond.json board_butterfly.json board_poker.json; do
+  [ -f "$b" ] || continue
+  if [ -f "$TARGET/bjbot/$b" ]; then
+    echo "   → $b 已存在，保留不覆盖"
   else
-    cp board_diamond.json "$TARGET/bjbot/board_diamond.json"
-    echo "   → bjbot/board_diamond.json"
+    cp "$b" "$TARGET/bjbot/$b"
+    echo "   → bjbot/$b"
   fi
-fi
+done
 echo
 
 # ── ③ 自检 ────────────────────────────────────
@@ -101,9 +120,14 @@ echo "③ 自检"
 cd "$TARGET"
 python3 -c "
 import ast,sys
-for f in ['bot_v6.py','reader_fast.py','vision_np.py','solver_pro.py','vmouse2.py','watch2.py']:
+import glob
+for f in ['bot_v6.py','reader_fast.py','vision_np.py','solver_pro.py','vmouse2.py','watch2.py'] \
+         + sorted(glob.glob('bot_*.py')) + sorted(glob.glob('modes/*.py')):
     ast.parse(open(f).read())
-print('   ✅ 语法全部通过')
+import os
+assert os.path.isdir('modes'), 'modes/ 没装上 —— bot 会 import 失败'
+assert len(glob.glob('modes/*.py')) >= 10, 'modes/ 文件不全'
+print('   ✅ 语法全部通过（含 %d 个模式文件）' % len(glob.glob('modes/*.py')))
 "
 if python3 -c "import json;d=json.load(open('$TARGET/bjbot/board.json'));print('   ✅ 标定: 分辨率',d['screen'],'棋盘起点',d['x0'],d['y0'])"; then :; fi
 echo
