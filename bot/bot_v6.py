@@ -235,6 +235,24 @@ def death_shots(cap, d, n=14, gap=0.75):
 RESTART_BTN = (640, 738)
 MAINMENU_BTN = (847, 738)
 
+# ★★ 2026-09-26 通用「失焦暂停」自愈（报告 §7 的落地）★★
+#   Bejeweled 3 丢了窗口焦点会【静默暂停】：画面照旧渲染（甚至还在动），
+#   但棋盘冻住、所有拖动被拒。判据只能是游戏时钟 Board+0x38。
+#
+#   NEUTRAL_BTN —— 抢焦点用的中性点击位：
+#     棋盘横向约占 x 449~1131（蝴蝶几何 x0=491.6 / pitch_x=85.32，8 列），
+#     1200 落在棋盘右侧的装饰背景上；y=450 取中段，避开左下「菜单/撤回」
+#     与顶部蛛网装饰，在结算/弹窗画面上也是无按钮的空白区。
+#   RESUME_BTN —— 若冻结是【局内「菜单」弹出的选项覆盖层】造成的（另一种
+#     暂停），抢焦点无效，得点覆盖层上的「返回」才能继续（2026-09-25 实测）。
+RESUME_BTN = (882, 597)
+NEUTRAL_BTN = (1200, 450)
+# 时钟连续冻结多久判定为「暂停」。25 秒：新局发牌 +「开始!」转场的冻结
+# 实测最多约 15 秒（见下面续局那段等 18×0.8s），留足余量不会误伤。
+# BJ_PAUSE_SECS 仅供测试时缩短阈值用（部署默认就是 25）。
+PAUSE_FROZEN_SECS = float(os.environ.get("BJ_PAUSE_SECS", "25"))
+PAUSE_RETRY_SECS = 30.0    # 两次抢焦点尝试之间的最小间隔（失败后节流）
+
 
 def click_restart(m, btn=None):
     """点「再来一次」继续玩。"""
@@ -345,6 +363,9 @@ def main():
     stall_until = 0.0       # ★ 停手截止时间（到点无论如何再试一次）
     stall_logged = False    # 停手提示只打一次
     prev_nbf = 0            # ★ 蝴蝶只数（变化时才打日志，别每步都刷）
+    cs_frozen_since = None  # ★ 时钟从哪一刻起开始冻结（None=没冻）
+    pause_try_at = 0.0      # ★ 上次抢焦点尝试的时间（节流用）
+    pause_n = 0             # ★ 抢焦点成功次数（统计）
 
     CS_LIVE = "/home/deck/bjbot/cs_live"
 
@@ -532,8 +553,11 @@ def main():
             if cs is not None:
                 if cs == cs_prev:
                     cs_frozen += 1
+                    if cs_frozen_since is None:
+                        cs_frozen_since = time.time()
                 else:
                     cs_frozen = 0
+                    cs_frozen_since = None
                     end_idle_logged = False
                     # 时钟在走 = 对局活跃 → 写标记（每个活跃段只写一次）
                     if cs > 0 and not cs_live_marked:
@@ -581,6 +605,53 @@ def main():
                         stall_logged = False
                         end_idle_logged = True
                         dead = 0
+
+                # ★★ 通用「失焦暂停」自愈（2026-09-26 新增）★★
+                #   上面那条冻结分支是【专为钻石矿结算写的】，条件是 nd>0（有泥）。
+                #   蝴蝶/经典/禅意模式 nd=0 ⇒ 那条永不触发，暂停时无人处理。
+                #   实测后果：08:47~08:59 卡在「死局」里空转 660 秒
+                #   （bot.out 末行 `08:58:54 死局(660)等洗牌/新局...`）——
+                #   棋盘冻住 ⇒ 求解器无解 ⇒ 死局循环 ⇒ 永远等不到洗牌。
+                #   判据只能用游戏时钟：画面帧间差【不能】当判据（暂停时仍有
+                #   环境动画，本轮为此白跑十几轮、差点把假几何写进代码）。
+                #   恢复分两级：先中性点击抢焦点；无效再点选项覆盖层的「返回」。
+                if (cs_frozen_since is not None
+                        and time.time() - cs_frozen_since >= PAUSE_FROZEN_SECS
+                        and cs > 0 and time.time() >= pause_try_at):
+                    pause_try_at = time.time() + PAUSE_RETRY_SECS
+                    _fz = time.time() - cs_frozen_since
+                    log("  ⏸ 游戏时钟已冻结 %.0f 秒（cs=%s 不变）→ 疑似失焦暂停，"
+                        "点 %s 抢回焦点" % (_fz, cs, NEUTRAL_BTN))
+                    _cs0 = cs
+                    _recovered = False
+                    for _btn, _what in ((NEUTRAL_BTN, "中性位抢焦点"),
+                                        (RESUME_BTN, "点覆盖层「返回」")):
+                        try:
+                            m.click(*_btn)
+                        except Exception as e:
+                            log("  %s 点击异常: %s" % (_what, e))
+                        time.sleep(1.5)
+                        _a = rd.cs_now()
+                        time.sleep(1.2)
+                        _b = rd.cs_now()
+                        if _a is not None and _b is not None and _b > _a:
+                            pause_n += 1
+                            log("  ✓ 时钟恢复走动（%s → %s）—— 暂停已解除"
+                                "（%s生效，第 %d 次）" % (_a, _b, _what, pause_n))
+                            cs_frozen = 0; cs_prev = None; cs_frozen_since = None
+                            pending = None
+                            stall = 0; stall_fp = None; stall_logged = False
+                            _recovered = True
+                            break
+                        log("  ✗ %s后时钟仍冻在 %s" % (_what, _b))
+                    else:
+                        log("  ✗ 抢焦点两级都无效（cs 仍为 %s），%.0f 秒后再试"
+                            % (_cs0, PAUSE_RETRY_SECS))
+                        cs_frozen_since = time.time()
+                    if _recovered:
+                        # 暂停期间读到的棋盘是冻结的、暂停解除后可能已开始变化，
+                        # 这一轮不再出招，下一轮重新读盘（pending 已清）。
+                        continue
             # ★★ 连续被拒保护（2026-09-25）★★
             #   交换连续多次没被游戏接受（棋盘纹丝不动）时不再盲目出手 ——
             #   否则几何不对 / 游戏在转场 / 有弹窗时会一直点同一个地方，
