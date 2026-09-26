@@ -505,16 +505,24 @@ def main():
             if nd and not prev_nd:
                 log("  ★ 钻石矿：泥土 %d 格（不可消不可换；消旁边的宝石自动挖开）" % nd)
             prev_nd = nd
-            # ★★ 像素几何按模式选（本局第一次读盘时定，局内不再变）★★
-            #   有泥土 ⇒ 钻石矿 ⇒ 用 board_diamond.json 那套格子位置。
-            if geo_key is None:
-                geo_key = "diamond" if nd > 0 else "classic"
+            # ★★ 像素几何按模式选（本局第一次读盘时定；蝴蝶可能晚一拍出现，允许开头纠正）★★
+            #   有泥土 ⇒ 钻石矿 ⇒ board_diamond.json
+            #   有蝴蝶 ⇒ 蝴蝶模式 ⇒ board_butterfly.json
+            #   其余   ⇒ 经典/禅意 ⇒ board.json
+            #   ★ 2026-09-26：蝴蝶模式棋盘比经典低约 58px、格距更小（实测标定）。
+            #     用错几何时第 0~2 行的拖动会落到棋盘外、被游戏拒 —— 实测旧几何 0/4、
+            #     新几何 6/6。症状就是"走法全被拒 + 反复拉黑 + 停手"。
+            _bf_now = bool((rd.last_extra or {}).get("butterflies"))
+            _want = "diamond" if nd > 0 else ("butterfly" if _bf_now else "classic")
+            if geo_key is None or (geo_key == "classic" and _want == "butterfly"):
+                geo_key = _want
                 _g = geo_for(geo_key)
                 set_geo(_g)
+                _why = {"diamond": "  ← 钻石矿格子比经典低约 54px，用错会点错格",
+                        "butterfly": "  ← 蝴蝶模式棋盘比经典低约 58px、格距更小，用错会点错格",
+                        }.get(geo_key, "")
                 log("  像素几何: %s  x0=%.0f y0=%.0f px=%.2f py=%.2f%s"
-                    % (geo_key, _g["x0"], _g["y0"], _g["pitch_x"], _g["pitch_y"],
-                       "  ← 钻石矿格子比经典低约 54px，用错会点错格"
-                       if geo_key == "diamond" else ""))
+                    % (geo_key, _g["x0"], _g["y0"], _g["pitch_x"], _g["pitch_y"], _why))
             # ★ 钻石矿计时结束检测（每局 1:30）：结束画面不是标准橙色结算
             #   面板，像素判不出 —— 但游戏时钟会停。判据：有泥 + cs>0（本局
             #   确实开始过）+ 时钟冻结满 8 次采样（约 20 秒；对局中时钟从不
