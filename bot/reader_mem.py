@@ -48,6 +48,11 @@ FLAG_SUPERNOVA = 5
 #     552 = 0x228、580 = 0x244，两边对得上。
 FLAG_COUNTER = 131072
 OFF_COUNTER = 0x244
+# ★ 蝴蝶宝石（蝴蝶模式的核心机制，2026-09-26 实测）
+#   状态位 128 (0x80)。实测抓到 4 只，位置 (3,1)(4,6)(6,2)(7,6) 全在棋盘下半部
+#   （蝴蝶从底下出现、逐格往上飞，到顶行就结束），裁图放大目视核实四张全是
+#   带蝴蝶翅膀的宝石。⇒ 优先消蝴蝶的判据就是这个位。
+FLAG_BUTTERFLY = 0x80
 
 # 超立方体没有固定颜色（color = -1），但状态位是 HYPERCUBE。
 # 视觉路线把它识别成 "S"，这里保持一致，避免被当成未知格。
@@ -238,7 +243,7 @@ class MemReader:
 
     # ── 核心：读一次棋盘 ────────────────────────────────────
     def _read_grid(self):
-        """返回 (grid|None, bad, extra)。extra = {score, level, flags}"""
+        """返回 (grid|None, bad, extra)。extra = {score, level, flags, timegems, butterflies}"""
         pr = self.pr
         board = pr.u32(self.gapp + OFF_BOARD)
         if not _ptr_ok(board):
@@ -247,6 +252,7 @@ class MemReader:
         bad = 0
         flags = []
         timegems = []
+        butterflies = []
         for i in range(8):                      # i = 行 → y
             row = []
             for j in range(8):                  # j = 列 → x
@@ -290,11 +296,15 @@ class MemReader:
                 #   供 bot 优先去消它 —— 不然时间不够，必死。
                 if f is not None and (f & FLAG_COUNTER):
                     timegems.append((i, j, pr.i32(piece + OFF_COUNTER)))
+                # ★ 蝴蝶宝石（蝴蝶模式）：飞到顶行就结束，供 bot 优先消掉。
+                if f is not None and (f & FLAG_BUTTERFLY):
+                    butterflies.append((i, j))
             grid.append(row)
         extra = {"score": pr.i32(board + OFF_SCORE),
                  "level": pr.i32(board + OFF_LEVEL),
                  "flags": flags,
                  "timegems": timegems,          # [(行, 列, 计数), ...]
+                 "butterflies": butterflies,    # [(行, 列), ...] 蝴蝶模式专用
                  "board": board}
         return grid, bad, extra
 

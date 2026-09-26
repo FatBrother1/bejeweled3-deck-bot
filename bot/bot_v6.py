@@ -179,18 +179,33 @@ def screen_is_gameover(frame):
 
       间隔 51，是所有候选里最大的。再叠一个 R > 200（结算面板 R=229，
       活跃最高 186）做双保险，9 个样本 9/9 全对。
+
+    ★★ 2026-09-26 第三次重订：上面那套是【拿钻石矿的数值当通用阈值】，栽了 ★★
+      蝴蝶模式的结算面板比钻石矿暗一档 —— 同一块「等级 / 宝石专家」区域实测
+      R=197、R-B=87，够不着 R>200 与 R-B>100 ⇒ **认不出结算**。后果：
+      bot 对着【冻结的上一局棋盘】一直出招（走法全被拒 → 全拉黑 → 停手 → 循环），
+      实测在蝴蝶结算画面上趴窝 40 多分钟，还误判成"几何不对"。
+
+      现在改用「橙色像素占比」：结算面板是一大片均匀橙黄，对局区是彩色宝石+暗蓝底。
+      区域 (150:650, 150:1130) 内满足 R>170 & G>90 & B<150 & R-B>50 的比例：
+          结算（蝴蝶 / 钻石矿）    0.64 / 0.63
+          对局（蝴蝶 / 钻石 / 经典）0.06 ~ 0.08
+          模式树 / 选项覆盖层      0.40 / 0.37
+      阈值取 0.5 —— 两边余量都很大，而且**不再依赖某一模式的绝对亮度**。
     """
     if frame is None:
         return None
     try:
         import numpy as np
         f = np.asarray(frame, dtype="float32")
-        panel = f[180:260, 300:620]
-        r = panel[:, :, 0].mean()
-        b = panel[:, :, 2].mean()
+        if f.ndim != 3 or f.shape[0] < 660 or f.shape[1] < 1140:
+            return None
+        p = f[150:650, 150:1130]
+        r, g, b = p[:, :, 0], p[:, :, 1], p[:, :, 2]
+        m = (r > 170) & (g > 90) & (b < 150) & ((r - b) > 50)
+        return bool(m.mean() > 0.5)
     except Exception:
         return None
-    return bool(r > 200 and (r - b) > 100)
 
 
 def death_shots(cap, d, n=14, gap=0.75):
@@ -329,6 +344,7 @@ def main():
     stall_fp = None         # ★ 停手期间的棋盘指纹（它变了就说明游戏继续了）
     stall_until = 0.0       # ★ 停手截止时间（到点无论如何再试一次）
     stall_logged = False    # 停手提示只打一次
+    prev_nbf = 0            # ★ 蝴蝶只数（变化时才打日志，别每步都刷）
 
     CS_LIVE = "/home/deck/bjbot/cs_live"
 
@@ -650,9 +666,17 @@ def main():
                 fl = {(i, j): f for (i, j, f) in
                       ((rd.last_extra or {}).get("flags") or [])
                       if f in (1, 2, 4, 5)}
+                # ★ 蝴蝶模式（2026-09-26）：蝴蝶宝石 = 状态位 128。
+                #   蝴蝶从底下出现、逐格往上飞，**飞到顶行这局就结束** ——
+                #   所以"能消掉蝴蝶"的招必须压倒性优先（求解器按 8-行号 加紧急度）。
+                bf = (rd.last_extra or {}).get("butterflies") or []
+                if bf and len(bf) != prev_nbf:
+                    log("  🦋 蝴蝶 %d 只: %s  ← 飞到顶行就结束，优先消"
+                        % (len(bf), ", ".join("(%d,%d)" % p for p in bf)))
+                    prev_nbf = len(bf)
                 rk = solver_pro.rank_moves(g, timegems=tg,
                                            banned=banned | banned_sticky,
-                                           flags=fl)
+                                           flags=fl, butterflies=bf)
                 # ★★ 拉黑掩码会掩出"假死局"（2026-09-26 实测）★★
                 #   被拉黑 3 次的格子会被上面改写成 '?'，而 '?' 不但自己不能连线，
                 #   还会**切断别人的连线**。钻石矿挖深以后有效走法本来就少，
@@ -666,7 +690,7 @@ def main():
                 if not rk and blacklist:
                     rk_raw = solver_pro.rank_moves(g_raw, timegems=tg,
                                                    banned=banned | banned_sticky,
-                                                   flags=fl)
+                                                   flags=fl, butterflies=bf)
                     if rk_raw:
                         log("  ★ 拉黑掩码掩出了假死局 → 清空拉黑，按真实棋盘走"
                             "（候选 %d，掩码格 %d）" % (len(rk_raw), len(blacklist)))
@@ -678,13 +702,20 @@ def main():
                 #   被游戏拒过的招会被 banned 挡掉；若所有合法招恰好都被挡掉，
                 #   上面两步都救不回来，仍会假死局。解禁重试有 stall 保护兜着
                 #   （连续被拒会自动停手等待），所以不会退化成"重复点击空转"。
+                #   ★★ 2026-09-26 修：这一层以前用 g（掩码版）⇒ 掩码把候选杀光时
+                #   解 ban 也救不回来（实测蝴蝶模式里 3 个合法走法全涉及被掩码的
+                #   (1,1)，于是 0 候选、趴窝 15 分钟）。必须用 g_raw。
                 if not rk and (banned or banned_sticky):
-                    rk_free = solver_pro.rank_moves(g, timegems=tg, banned=set(),
-                                                    flags=fl)
+                    rk_free = solver_pro.rank_moves(g_raw, timegems=tg, banned=set(),
+                                                    flags=fl, butterflies=bf)
                     if rk_free:
-                        log("  ★ 合法走法全被拉黑 → 解禁重算（候选 %d，原 ban %d 条）"
-                            % (len(rk_free), len(banned) + len(banned_sticky)))
+                        log("  ★ 合法走法全被拉黑 → 解禁重算（候选 %d，原 ban %d 条，"
+                            "掩码格 %d）"
+                            % (len(rk_free), len(banned) + len(banned_sticky),
+                               len(blacklist)))
                         banned.clear(); banned_sticky.clear()
+                        blacklist.clear()
+                        g = [r[:] for r in g_raw]
                         rk = rk_free
                 if not rk:
                     dead += 1
