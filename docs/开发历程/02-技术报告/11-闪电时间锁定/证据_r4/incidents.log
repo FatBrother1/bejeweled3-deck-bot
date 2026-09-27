@@ -1,0 +1,12 @@
+[2026-09-25 15:48:03] earlyoom 杀掉 python3 pclock.py run (PID 59018)
+  根因：pclock.py 把两次全量内存快照各存 int64+float64 四份数组 ≈ 8.6GB
+  earlyoom 阈值 -M 409600,307200 (400MB/300MB)
+  后果：python3 被杀，游戏 Bejeweled3.exe 与 Steam 会话随之退出
+  修复：新工具 pdiff.py 只存 int32（1.06GB）+ 快照B边读边比 + RSS 硬闸 1800MB
+
+[2026-09-25 16:07:53] earlyoom 杀掉 python3 pdiff3.py run 2.0 3.0 (PID 60332)
+  根因：三份快照的「返回」点击未生效 → 游戏时钟三次全为 cs=6761 → Δ=0
+        → 「差值≈0」判据退化为匹配全部未变化槽（~3亿条）→ cand 列表爆内存
+  后果：python3 被杀，游戏 Bejeweled3.exe 再次退出（Steam 客户端存活）
+  修复：①Δ<=0 直接报错退出，绝不比较 ②候选上限硬闸 ③ensure_paused/ensure_running
+        自愈状态机（点完按钮后读时钟验证是否真的冻结/恢复，不生效就重试）
