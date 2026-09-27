@@ -15,8 +15,12 @@ TARGET="${1:-$HOME}"
 case "$TARGET" in /*) ;; *) TARGET="$PWD/$TARGET" ;; esac
 cd "$HERE"
 echo "════ Bejeweled 3 bot 安装 ════"
-mkdir -p /home/deck/bjbot
-[ -f /home/deck/bjbot/autorestart ] || echo 1 > /home/deck/bjbot/autorestart
+# ★ 2026-09-27：这两行原来写死 /home/deck、不看 TARGET ⇒ 在非 Deck 机器上跑
+#   `bash install.sh /path` 会在 mkdir 处 permission denied、被 set -e 中断，
+#   等于文档里那句「装到指定目录」只在 Deck（或 root）下能用。改成跟着 TARGET 走；
+#   Deck 上 TARGET 默认就是 $HOME=/home/deck，行为与原来完全一致。
+mkdir -p "$TARGET/bjbot"
+[ -f "$TARGET/bjbot/autorestart" ] || echo 1 > "$TARGET/bjbot/autorestart"
 echo "源目录: $HERE"
 echo "目标  : $TARGET"
 echo
