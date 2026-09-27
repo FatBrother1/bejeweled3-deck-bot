@@ -42,7 +42,6 @@ class Mode(_Base):
     def choose(self, ctx):
         import poker as pk
         import solver_poker
-        import solver_pro
 
         g = ctx["g"]
         fr = ctx["frame"]
@@ -50,17 +49,18 @@ class Mode(_Base):
             fr = ctx["get_frame"]()
         hand = pk.read_hand(fr) if fr is not None else None
         known = [c for c in (hand or []) if c != "?"]
-        banned = ctx["banned"] | ctx["banned_sticky"]
 
-        if not known:
-            # 手牌一张没翻开 ⇒ 没有花色信息。这时也【不能】乱打 ——
-            # 随便凑出的低阶牌型会累积骷髅。仅在别无选择时按普通评分走。
-            rk = solver_pro.rank_moves(g, banned=banned)
-            if not rk:
-                return None
-            t = rk[0]
-            return {"rk": rk, "t": t, "pred": t[1], "cells": (t[6], t[7]),
-                    "hand": hand, "known": known}
+        # ★ 2026-09-27：手牌一张没翻开时**也**走牌局求解器。
+        #
+        # 旧代码这里退回普通评分（`solver_pro.rank_moves`，= 谁消得多谁第一），
+        # 理由是"没有花色信息、乱打会攒骷髅"。但每手牌的**第一张**恰恰决定了
+        # 这手能追哪个花色（已翻开一出现第二种颜色，同花就死了），把它交给一个
+        # 与牌型无关的贪心，等于"宝石消除求快"。用户本轮要的是
+        # "宝石消除不求快，只求优解优先拿到同花"。
+        #
+        # 没有花色信息时 solver_poker 不会瞎选：它按"有多少步能把这个色做成
+        # 严格多数"挑一个能持续产出的色当目标（第 17 轮的规则，当时被这条
+        # 分支挡在外面、从没在实战里跑过）。
         rk = solver_poker.rank_moves_poker(g, hand=hand, topk=10)
         if not rk:
             return None

@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
-"""牌局模式求解器：优先凑同花。
+"""牌局模式求解器：优先凑同花，凑不出就按牌型阶梯往下走。
 
 ## 和普通模式的根本区别
 
 普通模式：每次消除都给分，所以追求"每一步分最高"。
 牌局模式：**只有集齐 5 张牌才给分**，消得多但花色杂 = 白消。
+
+⇒ 所以这里的打分**完全不看"这一步消了多少颗宝石"**（那是"求快"），
+  只看"这一步拿到的那张牌，让手牌离哪个牌型更近"。
 
 ## 手牌是【从左往右填】的（2026-09-26 同步抓帧实证）
 
@@ -15,24 +18,46 @@
 
 ⇒ `?` 是【还没拿到的空位】，不是暗牌；已翻开的永远是一段前缀。
 
-**推论（本次优化最重要的一条）**：同花要 5 张同色 ⇒ **已翻开里一出现第二种
-颜色，这手同花就已经死了**。原来的 `best_flush_color` 只看"谁多"，`GRGO?`
-还在追 G —— 追一个数学上已经不可能的目标。
+**推论**：同花要 5 张同色 ⇒ **已翻开里一出现第二种颜色，这手同花就已经死了**。
+原来的 `best_flush_color` 只看"谁多"，`GRGO?` 还在追 G —— 追一个数学上已经
+不可能的目标。
 
 ## 出牌规则（2026-09-24 实测，wiki 未写明）
 
 **一次消除给一张牌，花色 = 这次消除的「多数色」。**
 
 ⇒ 不是"消到目标色"就行，**必须让目标色成为多数色**。
-⇒ 进一步：**并列多数是不保险的**（消 1G+1R，游戏给哪色未知），
-   所以本次把"严格多数"和"并列多数"分开计分，严格多数给更高权重。
+⇒ 进一步：**并列多数是不保险的**（消 1G+1R，游戏给哪色未知）。
 
-## 目标色怎么选（本次重写）
+## 目标 = 牌型阶梯（2026-09-27 重写）
 
-1. 同花还活着（已翻开全同色）→ 锁定那个色，还差 `5-k` 张
-2. 同花已死 → 改冲四条/葫芦：选已翻开里最多的那个色
-3. 手牌全空 → **按"有多少步能把它做成严格多数色"选**，不再按盘面宝石数选
-   （盘面多 ≠ 能凑出多数消除；实测这一步是空手时的关键）
+用户要的优先级：**同花 → 四条 → 葫芦 → 三条 → 两对 → 顺子 → 一对**。
+阶梯本身和"还差几张"都由 `poker.best_plan(hand)` 算（纯 Python、离线可测）。
+
+每一步的打分键是**字典序**（越靠前越优先）：
+
+    1. 这张牌到手之后，手牌还能做到的最高牌型分值   ← poker.best_plan
+    2. 凑成它还差几张（越少越好）
+    3. 这张牌是不是当前计划要的花色
+    4. 这一步之后盘上还剩多少颗"计划要的花色"（保住供给，下一张还要它）
+    5. 并列多数扣一点（游戏给哪色未知 = 不保险）
+    6. 特殊宝石、魔方（只在前面全平时起作用）
+
+旧打分（2026-09-26）是 `2600/1800 + 100×消目标色 + 1×总得分 + 2×潜力 + 30×魔方`
+—— **消得越多排越前**。实测两处明显偏离用户要的优先级（离线复现，见
+`test_poker.py` 的回归组）：
+
+  · **拿不到目标色的那一步，它奖励"消掉更多目标色"**（`10×t_hit`）。
+    这一步本来就拿不到目标色的牌，却把下一张牌要用的宝石自己烧掉 ——
+    400 个随机盘面里 159 个出现，最多的一个盘面一次烧掉 4 颗。
+  · **手牌 `GRBY?`（4 张全不同）时，目标色一定落在手里已有的颜色里**
+    ⇒ 最多凑「一对 2500」；正确解是拿一张**手里没有的颜色**凑「散牌 5000」。
+
+## 空手时追哪个色
+
+手牌一张没翻开时没有花色信息，`best_plan` 的目标色列表是空的，
+这时按**第 17 轮实测出来的规则**选：哪个色"能做出严格多数的步数"最多就选它
+（盘面宝石多 ≠ 能凑出多数消除）。
 
 ## 分值表
 
@@ -47,14 +72,13 @@
 """
 import solver_pro
 
-GLYPHS = "RPGWOYB"
+GLYPHS = "RGOYBPW"
 _LAST_TARGET = [None]
 _LAST_WHY = [None]
 
-# 严格多数 / 并列多数 的基础分。严格多数 = 这一步必定拿到目标色的牌；
-# 并列多数 = 游戏给哪一色未知（实测只验过严格多数的例子），所以压低。
-SC_STRICT = 2600.0
-SC_TIE = 1800.0
+# 并列多数的惩罚。只在前四项全平时起作用，量级远小于最小的牌型分差
+# （一对 2500 → 散牌 5000）。
+UNCERTAIN_PENALTY = 1
 
 
 def _colors_in_move(g, sim_result):
@@ -107,18 +131,48 @@ def _hand_counts(hand):
     return c
 
 
-def _pick_target(g, hand, moves):
-    """决定这一步追哪个花色。返回 (颜色, 理由)。
+def _cards_of(colcnt):
+    """这一步会拿到哪种花色的牌 —— 多数色；并列则全部列出（游戏给哪色未知）。"""
+    if not colcnt:
+        return []
+    top = max(colcnt.values())
+    if top <= 0:
+        return []
+    return sorted(c for c, n in colcnt.items() if n == top)
+
+
+def _plan_after(hand, card):
+    """假设下一张牌是 card，这手牌**还能做到**的最好牌型。
+
+    返回 poker.best_plan 的 `(名称, 分值, 还差几张, 目标色列表)`。
+    """
+    import poker
+    h = list(hand or [])
+    for k in range(len(h)):
+        if h[k] == "?":
+            h[k] = card
+            return poker.best_plan(h)
+    return poker.best_plan(h)          # 手牌已满（游戏马上结算），这张不算数
+
+
+def _keep(final, tg):
+    """这一步之后盘上还剩多少颗"我们还要的花色"。越多越好（下一张还要它）。"""
+    n = 0
+    for row in final:
+        for ch in row:
+            if ch in tg:
+                n += 1
+    return n
+
+
+def _pin_first_color(g, moves):
+    """手牌一张没翻开（花色还没定）时，先用哪个色开局。
+
+    ★ 第 17 轮的规则，原样保留：按"有多少步能把它做成【严格】多数色"选，
+      不按盘面宝石数选（盘面多 ≠ 能凑出多数消除）。
 
     moves: [(sim, colcnt, i, j, i2, j2, is_cube), ...]（已枚举好的合法交换）
     """
-    import poker
-    alive, locked, need = poker.flush_state(hand)
-
-    if alive and locked:
-        return locked, "同花还活着：已 %d 张 %s，还差 %d 张" % (5 - need, locked, need)
-
-    # 每种颜色"能做严格多数"的步数
     strict = {}
     for mv in moves:
         colcnt = mv[1]
@@ -130,25 +184,13 @@ def _pick_target(g, hand, moves):
             strict[top] = strict.get(top, 0) + 1
 
     board = _board_counts(g)
-
-    if not alive:
-        # 同花已死 → 冲四条/葫芦：选已翻开里最多的那个色
-        hc = _hand_counts(hand)
-        if hc:
-            mx = max(hc.values())
-            cands = [c for c, n in hc.items() if n == mx]
-            t = max(cands, key=lambda x: (strict.get(x, 0), board.get(x, 0)))
-            return t, ("同花已死（已翻开 %s 混色）→ 改冲四条/葫芦，追 %s"
-                       % ("".join(sorted(hc)), t))
-
-    # 手牌全空：按"能做成严格多数的步数"选
     if not strict:
         if not board:
             return None, "盘面没有可用颜色"
         t = max(board, key=board.get)
         return t, "没有任何一步能做出严格多数 → 退回盘面最多色 %s" % t
     t = max(strict, key=lambda x: (strict.get(x, 0), board.get(x, 0)))
-    return t, ("空手：%s 有 %d 步可做严格多数（盘面 %d 颗，候选中最多）"
+    return t, ("手牌全空：%s 有 %d 步可做严格多数（盘面 %d 颗，候选中最多）"
                % (t, strict[t], board.get(t, 0)))
 
 
@@ -162,18 +204,27 @@ def get_last_why():
     return _LAST_WHY[0]
 
 
-def rank_moves_poker(g, hand=None, target=None, w_target=6.0, w_score=1.0,
-                     w_special=8.0, w_pot=2.0, topk=0):
-    """牌局模式打分。
+def rank_moves_poker(g, hand=None, target=None, w_special=8.0, topk=0):
+    """牌局模式打分（2026-09-27：改成按牌型阶梯排序）。
 
     hand   : poker.read_hand() 的结果（list of 花色字符，'?' 是空位）
-    target : 目标花色；给了就用它，否则按 _pick_target 推断
+    target : 目标花色；给了就用它，否则按牌型阶梯推断
+    topk   : 只返回前 k 个（0 = 全返回）
 
-    返回按分数降序的列表，每项：
-      (score, total, cleared, casc, spec, (i,j), (i2,j2), final, t_hit, t_dom,
-       t_strict)
+    ⚠️ 旧签名里的 `w_target/w_score/w_pot` 已删 —— 那三个权重就是"消得越多
+       分越高"的来源，本轮的目标正是**不看消了多少**。没有调用方传它们。
+
+    返回按优先级降序的列表，每项 11 元组（结构没动，bot 依赖 t[1]/t[5]/t[6]/t[8]）：
+      (计划分值, total, cleared, casc, spec, (i,j), (i2,j2), final,
+       t_hit, t_dom, t_strict)
+
+    t[0] 现在是**"这张牌到手后还能做到的最高牌型分值"**（2500~50000），
+    不再是旧的加权总分；它随排序键单调不增。
     """
-    # ── 第一遍：枚举所有合法交换（目标色的选择依赖这一步的结果）──
+    import poker
+    hand = list(hand) if hand else ["?"] * 5
+
+    # ── 第一遍：枚举所有合法交换 ──
     moves = []
     for i in range(8):
         for j in range(8):
@@ -199,50 +250,71 @@ def rank_moves_poker(g, hand=None, target=None, w_target=6.0, w_score=1.0,
         _LAST_WHY[0] = "无合法交换"
         return []
 
-    # ── 决定目标色 ──
+    # ── 决定目标色（= 计划要收的花色）──
+    plan = poker.best_plan(hand)         # (名称, 分值, 还差几张, 目标色列表)
     if target:
         tgt, why = target, "调用方指定"
+    elif plan[3]:
+        tgt = plan[3][0]
+        why = ("牌型阶梯：这手还能做「%s」→ 追 %s，还差 %d 张"
+               % (plan[0], "/".join(plan[3]), plan[2]))
     else:
-        tgt, why = _pick_target(g, hand, moves)
+        # 手牌全空：best_plan 给不出颜色，按"能做出严格多数的步数"定
+        tgt, why = _pin_first_color(g, moves)
     _LAST_TARGET[0] = tgt
     _LAST_WHY[0] = why
 
-    # ── 第二遍：打分 ──
-    out = []
+    # ── 第二遍：按"这张牌到手之后还能做到什么牌型"排序 ──
+    rows = []
+    tgset = plan[3] or ([tgt] if tgt else [])
     for (sim, colcnt, i, j, i2, j2, is_cube) in moves:
         total, casc, first_cells, first_runs, spec, final = sim
-        t_hit = colcnt.get(tgt, 0) if tgt else 0
-        t_dom = 1 if _is_majority(colcnt, tgt) else 0
-        t_strict = 1 if _is_strict_majority(colcnt, tgt) else 0
-        cleared = len(set(first_cells))
-        cube_bonus = 1 if is_cube else 0
+        cards = _cards_of(colcnt)
 
-        # ★★ 策略核心（2026-09-24 实证规则 + 2026-09-26 严格多数）★★
-        #
-        # 一次消除给【一张】牌，花色 = 这次消除的【多数色】。
-        # 手牌满 5 张自动结算，玩家无法选择"打不打"，
-        # 唯一能控制的就是"让哪种颜色成为多数色"。
-        # 同花 50000 分且永不生成骷髅 ⇒ 唯一目标就是尽快凑同花。
-        #
-        # ★ 2026-09-26：并列多数与严格多数分开。消 1G+1R 时游戏给哪色未知，
-        #   不能和"消 3G+1R"（必定 G）同等对待。
-        base = SC_STRICT if t_strict else (SC_TIE if t_dom else 0.0)
-        if t_dom:
-            score = (base
-                     + 100.0 * t_hit
-                     + w_score * total
-                     + w_special * spec
-                     + w_pot * solver_pro.potential(final)
-                     + 30.0 * cube_bonus)
-        elif t_hit > 0:
-            score = (10.0 * t_hit                 # 消到目标色但不是多数色，聊胜于无
-                     + 0.2 * total)
+        if cards:
+            infos = [_plan_after(hand, c) for c in cards]
+            vals_ = [x[1] for x in infos]
+            needs_ = [x[2] for x in infos]
+            # 并列多数时游戏给哪色未知 ⇒ 按各可能结果的**平均**算（期望值），
+            # 再在键尾扣一点不确定惩罚。
+            bi = max(range(len(cards)), key=lambda k: (vals_[k], -needs_[k]))
+            best_tg = infos[bi][3] or [cards[bi]]
+            val = sum(vals_) / float(len(vals_))
+            need = sum(needs_) / float(len(needs_))
         else:
-            score = (0.05 * total                 # 完全没消到目标色 = 几乎不考虑
-                     + w_special * spec * 0.5)
-        out.append((score, total, cleared, casc, spec, (i, j), (i2, j2),
-                    final, t_hit, t_dom, t_strict))
-    out.sort(key=lambda t: -t[0])
+            best_tg = list(tgset)
+            val, need = 0.0, 5.0
+
+        hit = 1 if [c for c in cards if c in tgset] else 0
+        keep = _keep(final, best_tg)
+        unc = UNCERTAIN_PENALTY if len(cards) > 1 else 0
+
+        # 字典序键：牌型 → 还差几张 → 是不是目标色 → 保住供给 → 不确定 → 特殊 → 魔方
+        key = (-val, need, -hit, -keep, unc, -w_special * spec,
+               0 if is_cube else 1, i, j, i2, j2)
+        rows.append((key, val, total, len(set(first_cells)), casc, spec,
+                     (i, j), (i2, j2), final, colcnt, cards))
+
+    rows.sort(key=lambda r: r[0])
+
+    # ── 第三遍（只为日志）：目标色按"这一步真正拿到的那张牌"显示 ──
+    # 计划的目标色可能不止一个（`GR???` 追 G 或 R 都算数；散牌要的是手里还没有
+    # 的颜色）。取第一名实际产出的那个，日志里 `目标色/消目标色/★严格多数`
+    # 三栏才自洽；第一名没产出目标色时保留计划里的第一个 —— 那一行正好就是
+    # "这一步拿不到目标色"的现场，得看得见。
+    win_cards = rows[0][10]
+    inter = [c for c in win_cards if c in tgset]
+    if inter:
+        tgt = inter[0]
+        _LAST_TARGET[0] = tgt
+
+    out = []
+    for r in rows:
+        colcnt = r[9]
+        out.append((r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8],
+                    colcnt.get(tgt, 0) if tgt else 0,
+                    1 if _is_majority(colcnt, tgt) else 0,
+                    1 if _is_strict_majority(colcnt, tgt) else 0))
     return out[:topk] if topk else out
 
 
@@ -266,11 +338,13 @@ if __name__ == "__main__":
         ["P", "B", "Y", "G", "R", "O", "W", "P"],
         ["G", "R", "O", "Y", "P", "B", "W", "G"],
     ]
+    import poker
     for hand in (["G", "G", "?", "?", "?"], ["G", "R", "?", "?", "?"],
-                 ["?", "?", "?", "?", "?"]):
+                 ["G", "R", "B", "Y", "?"], ["?", "?", "?", "?", "?"]):
         r = rank_moves_poker(g, hand=hand, topk=3)
-        print("手牌 %s  目标色=%s" % ("".join(hand), get_last_target()))
+        print("手牌 %s  计划=%s  目标色=%s"
+              % ("".join(hand), poker.best_plan(hand), get_last_target()))
         print("   理由: %s" % get_last_why())
         for t in r:
-            print("     分=%.0f 直接得分=%-4d 消目标色=%-2d 多数=%d %s<->%s"
+            print("     牌型分=%-6.0f 直接得分=%-4d 消目标色=%-2d 多数=%d %s<->%s"
                   % (t[0], t[1], t[8], t[9], t[5], t[6]))

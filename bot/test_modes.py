@@ -136,17 +136,17 @@ res2 = modes.by_key("classic").choose(c2)
 check("② 合法走法全被 ban → 解禁重算救回", res2 is not None,
       res2 and res2["cells"])
 
-print("\nF. 牌局模式选步 == 旧牌局分支")
+print("\nF. 牌局模式选步 == 牌局求解器（2026-09-27 起空手也走它）")
 _g = rnd_board(11)
 _orig_read = poker.read_hand
 try:
-    # ① 手牌全背面 → 旧代码走 solver_pro.rank_moves，取 t[6],t[7]
+    # ① 手牌全背面 → 2026-09-27 改：也走牌局求解器（原来退回普通评分），取 t[5],t[6]
     poker.read_hand = lambda fr, verbose=False: ["?", "?", "?", "?", "?"]
     res = modes.by_key("poker").choose(ctx_for(_g, frame="x"))
-    ref = solver_pro.rank_moves(_g, banned=set())
+    ref = solver_poker.rank_moves_poker(_g, hand=["?", "?", "?", "?", "?"], topk=10)
     ok = (res is None and not ref) or (res and ref and
-                                       res["cells"] == (ref[0][6], ref[0][7]))
-    check("① 手牌全背面 → 走普通评分，取 t[6],t[7]", ok,
+                                       res["cells"] == (ref[0][5], ref[0][6]))
+    check("① 手牌全背面 → 走牌局求解器，取 t[5],t[6]", ok,
           res and res["cells"])
     # ② 手牌有花色 → 旧代码走 solver_poker，取 t[5],t[6]
     poker.read_hand = lambda fr, verbose=False: ["G", "G", "?", "?", "?"]

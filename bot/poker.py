@@ -53,8 +53,14 @@
 （Board 对象内扫过 0x0~0x4000，全是零填充的假阳性），
 而它在画面上位置固定、只有 5 张，截一小块判颜色几毫秒就够了
 （读整个棋盘也才 1.18 ms）。
+
+★ 2026-09-27：`numpy` 改成**惰性导入**（只在 `_card_color` 里 import）。
+  原因：本模块里只有"看画面读牌"这一件事需要 numpy，而**决策逻辑**
+  （`flush_state` / `hand_value` / 新增的牌型阶梯 `best_plan`）是纯 Python。
+  模块级 import 会让整个牌局决策栈在没装 numpy 的机器上 import 就炸
+  （本机就是这样：`test_modes.py` / `test_poker.py` 在手机上一行都跑不了，
+  只能上 Deck 跑）。惰性之后决策逻辑本机可测，读牌路径行为一字未变。
 """
-import numpy as np
 
 # 5 张牌的取样区（1280x800 绝对坐标，实测标定）
 #   依据：扫描 y=345..465 / x=155..360 确认牌的实际范围（红白菱形花纹密集区）。
@@ -83,6 +89,9 @@ REF = {
 COLOR_NAME = {"R": "红", "W": "白", "G": "绿", "Y": "黄",
               "P": "紫", "O": "橙", "B": "蓝", "?": "背面"}
 
+# 七种花色的固定顺序（与 solver_pro.GLYPHS 同一套，牌型阶梯里用来列"还没出现的颜色"）
+GLYPHS = "RGOYBPW"
+
 
 def _card_color(frame, cx, cy):
     """读一张牌的主色。cx,cy 是牌中心。返回 (glyph, rgb, sat)。
@@ -94,6 +103,7 @@ def _card_color(frame, cx, cy):
        ⇒ 均值被白色淹没 ⇒ 黄/蓝宝石被读成 '?'。
        修法：改用**固定饱和度阈值**，而不是分位数。
     """
+    import numpy as np      # 惰性导入：只有读牌这条路径需要它（见文件头说明）
     # 找到 cx,cy 落在哪个牌框里
     box = None
     for (x0, y0, x1, y1) in CARD_BOXES:
@@ -202,6 +212,127 @@ def flush_state(hand):
     if len(set(vals)) == 1:
         return (True, vals[0], 5 - len(vals))
     return (False, None, 0)
+
+
+# ── 牌型阶梯（2026-09-27 新增）────────────────────────────────
+#
+# 用户要的优先级：**同花 → 四条 → 葫芦 → 三条 → 两对 → 顺子 → 一对**，
+# 也就是游戏左上角分值表从高到低。分值本身就是优先级，所以阶梯直接按分值排。
+#
+# ⚠️ 名字对齐：游戏面板写的是「顺子 5000」（五张花色全不同），
+#    本文件历史上叫它「散牌 Spectrum」（wiki 的英文名）。这里沿用内部旧名，
+#    免得同一个日志里出现两个名字。
+RANK_LADDER = (
+    ("同花", 50000),
+    ("四条", 30000),
+    ("葫芦", 15000),
+    ("三条", 10000),
+    ("两对", 7500),
+    ("散牌", 5000),
+    ("一对", 2500),
+)
+RANK_VALUE = dict(RANK_LADDER)
+
+
+def best_plan(hand):
+    """★ 2026-09-27：这手牌**还能做到**的最高牌型，以及推进它要拿什么花色。
+
+    返回 `(名称, 分值, 还差几张, 目标色列表)`。
+
+    「还差几张」= 凑成该牌型还要连续拿到几张牌（每张都得是目标色）。
+    目标色列表可能为空 —— 只有一种情况：手牌一张没翻开，花色还没定，
+    这时"目标色"要由盘面决定（交给 solver_poker 按能做出严格多数的步数选）。
+
+    为什么需要它：旧代码在"同花已死"之后只做一件事 —— 选**已翻开里最多**
+    的那个色。那是个不错的启发式，但它没把牌型阶梯当回事，于是：
+
+      · 手牌 `GRBY?`（4 张全不同）：最优是再拿一张**手里没有的颜色**凑
+        「散牌 5000」，旧代码一定在 G/R/B/Y 里挑 ⇒ 只能凑「一对 2500」
+      · 手牌 `GGRB?`（2+1+1）：四条已经没戏（只剩 1 个空位）、葫芦也没戏，
+        最优是再拿 G 凑「三条 10000」；旧代码选 G 是对的，但理由是"G 最多"
+        而不是"三条比两对高"
+
+    可达性全部按"还剩几个空位"算，不做概率假设。
+    """
+    vals = [c for c in (hand or []) if c and c != "?"]
+    n = len(vals)
+    slots = 5 - n
+    cnt = {}
+    for c in vals:
+        cnt[c] = cnt.get(c, 0) + 1
+
+    if n >= 5:                      # 手牌已满，游戏直接结算，没什么可计划的
+        name, pts, _ = hand_value(vals)
+        return (name, pts, 0, [])
+
+    # ① 同花：已翻开的全同色（一张没翻开也算"还活着"，只是还没定色）
+    if len(cnt) <= 1:
+        c = vals[0] if vals else None
+        return ("同花", RANK_VALUE["同花"], 5 - n, [c] if c else [])
+
+    # ② 四条：某个色还差几张贴满 4 张
+    need = {c: 4 - cnt[c] for c in cnt if 4 - cnt[c] <= slots}
+    if need:
+        k = min(need.values())
+        return ("四条", RANK_VALUE["四条"], k, [c for c in need if need[c] == k])
+
+    # ③ 葫芦：三张 + 一对（两个色，凑齐所需张数之和不超过空位数）
+    hulu = []
+    for a in cnt:
+        for b in cnt:
+            if a == b:
+                continue
+            x = max(0, 3 - cnt[a])
+            y = max(0, 2 - cnt[b])
+            if x + y <= slots:
+                hulu.append((x + y, a, b))
+    if hulu:
+        k = min(x for x, _, _ in hulu)
+        tg = []
+        for x, a, b in hulu:
+            if x == k:
+                for c in (a, b):
+                    if c not in tg:
+                        tg.append(c)
+        return ("葫芦", RANK_VALUE["葫芦"], k, tg)
+
+    # ④ 三条
+    need = {c: 3 - cnt[c] for c in cnt if 3 - cnt[c] <= slots}
+    if need:
+        k = min(need.values())
+        return ("三条", RANK_VALUE["三条"], k, [c for c in need if need[c] == k])
+
+    # ⑤ 两对
+    two = []
+    ks = sorted(cnt)
+    for ai in range(len(ks)):
+        for bi in range(ai + 1, len(ks)):
+            a, b = ks[ai], ks[bi]
+            x = max(0, 2 - cnt[a])
+            y = max(0, 2 - cnt[b])
+            if x + y <= slots:
+                two.append((x + y, a, b))
+    if two:
+        k = min(x for x, _, _ in two)
+        tg = []
+        for x, a, b in two:
+            if x == k:
+                for c in (a, b):
+                    if c not in tg:
+                        tg.append(c)
+        return ("两对", RANK_VALUE["两对"], k, tg)
+
+    # ⑥ 散牌（游戏面板叫「顺子」）：5 张全不同 ⇒ 接下来拿手里**还没有**的颜色
+    if len(cnt) + slots >= 5:
+        return ("散牌", RANK_VALUE["散牌"], 5 - n,
+                [c for c in GLYPHS if c not in cnt])
+
+    # ⑦ 一对
+    need = {c: 2 - cnt[c] for c in cnt if 2 - cnt[c] <= slots}
+    if need:
+        k = min(need.values())
+        return ("一对", RANK_VALUE["一对"], k, [c for c in need if need[c] == k])
+    return ("无", 0, slots, [])
 
 
 # 各牌型的骷髅风险：(骷髅生成率, 必定生成骷髅的手数)
