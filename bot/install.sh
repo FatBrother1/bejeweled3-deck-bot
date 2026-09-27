@@ -8,6 +8,12 @@
 set -e
 HERE="$(cd "$(dirname "$0")" && pwd)"
 TARGET="${1:-$HOME}"
+# ★ 2026-09-27：下面用的是 modes/*.py、board.json 这类相对路径，所以必须先切到脚本所在目录。
+#   否则从别处调用（bash /path/to/bot/install.sh）会在 cp 处失败，被 set -e 半途中断
+#   —— 实测只装出 23 个文件、modes/ 是空的，bot 一起来就 ImportError。
+#   TARGET 先转成绝对路径，免得相对路径被这次 cd 改变含义。
+case "$TARGET" in /*) ;; *) TARGET="$PWD/$TARGET" ;; esac
+cd "$HERE"
 echo "════ Bejeweled 3 bot 安装 ════"
 mkdir -p /home/deck/bjbot
 [ -f /home/deck/bjbot/autorestart ] || echo 1 > /home/deck/bjbot/autorestart
