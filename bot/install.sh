@@ -52,7 +52,7 @@ mkdir -p "$TARGET/bjbot"
 #   所以一律先写 .tmp 再原子改名，并且跳过"源=目标"的文件。
 copy_one() {
   local f="$1"
-  local src="$HERE/$f"
+  local src="${2:-$HERE/$f}"
   local dst="$TARGET/$f"
   # 用两段替换 + 中间占位符 @@DSHROOT@@：
   #  ① 先 /home/deck → 占位符  ② 占位符 → 实际目录
@@ -79,14 +79,37 @@ PY
 #     cap2.py      —— 引擎的抓帧入口（PipeWire 坏了退 gamescopectl），不装起不来
 #     reader_mem.py—— --vision auto/mem 的内存后端（不装自动降级成视觉）
 #     which_mode.py—— watch2.py 靠它认模式（不装守护只能 --mode auto）
+# ★ 2026-09-27 再补四个：牌局的两个求解件和两个工具。
+#     poker.py / solver_poker.py —— modes/poker.py 在 choose 里 import 它们，
+#       不在顶层 import 所以启动不报错，**跑到牌局模式才 ImportError**。
+#       这两个是硬依赖，不装等于牌局模式坏掉。
+#     calib.py      —— 标定工具，README 里要求换机器/换分辨率时跑它。
+#     solver_fast.py—— 只影响 --engine fast（pro 是默认，不需要它）。
+#   ★ which_mode.py 不在这里：bot/ 目录下根本没有这个文件（仓库里只有
+#     decky-plugin/BJBot/which_mode.py 一份），原来把它写进这个清单 ⇒ 源文件
+#     不存在 ⇒ copy_one 失败 ⇒ set -e 把安装中断在这一步，连 watch2.py 和
+#     run2.sh 都没装上。改成下面单独一段：两处找，找不到只警告不中断。
 for f in bot_v6.py \
          bot_classic.py bot_zen.py bot_lightning.py bot_icescape.py \
          bot_butterfly.py bot_diamond.py bot_poker.py bot_quest.py \
          reader_fast.py capture_pw.py cap2.py vision_np.py solver_pro.py \
-         reader_mem.py which_mode.py vmouse2.py \
+         reader_mem.py vmouse2.py \
+         poker.py solver_poker.py calib.py solver_fast.py \
          watch2.py run2.sh; do
   copy_one "$f"
 done
+# ★ which_mode.py：插件和守护共用这一份。它内部有 4 处写死的 /home/deck
+#   （sys.path.insert），所以必须走 copy_one 的路径改写，不能直接 cp。
+WM_SRC=""
+for c in "$HERE/which_mode.py" "$HERE/../decky-plugin/BJBot/which_mode.py"; do
+  [ -f "$c" ] && WM_SRC="$c" && break
+done
+if [ -n "$WM_SRC" ]; then
+  copy_one "which_mode.py" "$WM_SRC"
+else
+  echo "   ⚠️ 没找到 which_mode.py（bot/ 与 decky-plugin/BJBot/ 都没有）"
+  echo "      守护会退回 --mode auto，能跑但认不出模式；从完整仓库装就没有这个问题"
+fi
 chmod +x "$TARGET/run2.sh"
 echo "   → run2.sh (已加可执行权限)"
 # ★ 模式包：一个模式一个文件。不拷它 bot 起不来
