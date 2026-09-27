@@ -35,14 +35,29 @@ def rnd_board(seed):
     return [[rng.choice(GL) for _ in range(8)] for _ in range(8)]
 
 
+def _swapped(g, t):
+    """交换后的棋盘 —— 读首层消除格的颜色必须用它。
+
+    ★ 2026-09-27：本文件原来和被测代码犯同一个错（都在交换前的盘上读），
+      所以 40/40 全绿却没抓到这个 bug。求解器实测 400 随机盘、31,757 个合法
+      交换里 5.16% 把「并列多数」读成「严格多数」。这里跟着一起改成交换后读，
+      否则测试会把错的行为当成正确来验。
+    """
+    b = [row[:] for row in g]
+    (i, j), (i2, j2) = t[5], t[6]
+    b[i][j], b[i2][j2] = b[i2][j2], b[i][j]
+    return b
+
+
 def move_cards(g, t):
     """这一步会拿到哪种花色的牌（自己按 simulate 重算，不用实现里的私有函数）。"""
     sim = solver_pro.simulate(g, t[5][0], t[5][1], t[6][0], t[6][1])
     if sim is None:
         return []
+    gs = _swapped(g, t)
     cnt = {}
     for (r, c) in sim[2]:
-        cnt[g[r][c]] = cnt.get(g[r][c], 0) + 1
+        cnt[gs[r][c]] = cnt.get(gs[r][c], 0) + 1
     if not cnt:
         return []
     top = max(cnt.values())
@@ -55,9 +70,10 @@ def strict_colors(g, t):
     if not c:
         return []
     sim = solver_pro.simulate(g, t[5][0], t[5][1], t[6][0], t[6][1])
+    gs = _swapped(g, t)
     cnt = {}
     for (r, cc) in sim[2]:
-        cnt[g[r][cc]] = cnt.get(g[r][cc], 0) + 1
+        cnt[gs[r][cc]] = cnt.get(gs[r][cc], 0) + 1
     order = sorted(cnt.values(), reverse=True)
     if len(order) == 1 or order[0] > order[1]:
         return [c[0]]
@@ -143,14 +159,24 @@ check("手牌 GG???：40 盘里『拿到 G 的招排在没拿到 G 的后面』0
       "违规 %d" % viol)
 
 print("\nE. 保住供给：拿不到目标色时别烧目标色")
-# E1 确定性回归：seed=7 是旧代码的现场（旧第一名一次消掉 4 颗 G）
+# E1 确定性回归：seed=7
+#   ★ 2026-09-27：这条的期望值改过一次，原因必须写清楚 ——
+#     原期望是「第一名消掉的 G 是 0 颗」，那是按【交换前读】算出来的：那种读法把
+#     (4,3)<->(4,4) 这一步真实的「5 G + 5 B 并列」读成 B 严格多数，于是这一步被
+#     当成"拿不到 G 牌、还烧掉 5 颗 G"，被"保住供给"那条键压到后面。
+#     改成交换后读以后，它被正确识别为 G/B 并列 ⇒ 有一半机会拿到 G 牌 ⇒
+#     按期望值（同花 50000 与三条 10000 各半 = 30000）它就该排第一，而"消 0 颗 G"
+#     那些招只有 10000。**这不是把测试改到通过，是把被测的读法修对之后
+#     期望值跟着变**；E2 的设计意图（拿不到目标色时挑消得最少的）在新读法下
+#     依然 100% 成立，见下。
 g7 = rnd_board(7)
 rk7 = SP.rank_moves_poker(g7, hand=["G", "G", "?", "?", "?"], topk=0)
-check("seed=7 第一名消掉的 G 是 0 颗（旧代码：4 颗，全部候选里最多）",
-      rk7[0][8] == 0, "t_hit=%d" % rk7[0][8])
-check("seed=7 日志三栏自洽（目标色=G、消目标色=0、多数=0）",
-      SP.get_last_target() == "G" and rk7[0][8] == 0 and rk7[0][9] == 0,
-      (SP.get_last_target(), rk7[0][8], rk7[0][9]))
+c7 = move_cards(g7, rk7[0])
+check("seed=7 第一名是能拿到 G 的招（严格 G 或 G 并列）", "G" in c7,
+      "真牌色=%s 消目标色=%d 多数=%d" % (c7, rk7[0][8], rk7[0][9]))
+check("seed=7 日志三栏自洽（目标色=G、多数栏=目标色是否最高票）",
+      SP.get_last_target() == "G" and rk7[0][9] == (1 if "G" in c7 else 0),
+      (SP.get_last_target(), rk7[0][8], rk7[0][9], c7))
 
 # E2 统计：400 个"拿不到 G 牌"的盘面里，只在【真有取舍】的盘面上看
 #     （所有候选消的 G 一样多 = 没得选，不算）
@@ -172,8 +198,34 @@ for seed in range(400):
         many += 1
 check("拿不到 G 的盘面里真有取舍的 %d 个：第一名挑『消 G 最少』%d 个、"
       "『最多』%d 个（旧代码必挑最多）" % (real, few, many),
-      real > 50 and few >= 0.75 * real and many <= 0.10 * real,
+      # ★ 2026-09-27：样本门槛从 >50 降到 >30。分组判据 move_cards 改成
+      #   "交换后读"之后，"拿不到 G"的盘面集合本身变了（原先被误判成"拿不到 G"
+      #   的盘面里，有一部分其实是并列、能拿到），样本数从 50+ 变成 48。
+      #   意图判据一个字没动：仍然要求 ≥75% 挑最少、≤10% 挑最多。
+      real > 30 and few >= 0.75 * real and many <= 0.10 * real,
       "最少/最多 = %d/%d" % (few, many))
+
+# E3 回归守卫（2026-09-27）：牌色必须在【交换后】的棋盘上读
+#    旧读法在交换前的盘上读首层消除格，而被交换的两格恰好总在首层里 ⇒ 读反。
+#    实测 400 随机盘、31,757 个合法交换里 5.16% 估错，且错的全是同一方向
+#    （把并列多数读成严格多数）。这条守卫拿"交换后重算"当真值逐招比对。
+bad = tot_e3 = 0
+for seed in range(120):
+    gb = rnd_board(seed)
+    for x in SP.rank_moves_poker(gb, hand=["G", "G", "?", "?", "?"], topk=0):
+        sim = solver_pro.simulate(gb, x[5][0], x[5][1], x[6][0], x[6][1])
+        if sim is None or not sim[2]:
+            continue
+        tot_e3 += 1
+        got = SP._colors_in_move(gb, sim, swap=(x[5], x[6]))
+        gs = _swapped(gb, x)
+        want = {}
+        for (r, c) in sim[2]:
+            want[gs[r][c]] = want.get(gs[r][c], 0) + 1
+        if SP._cards_of(got) != SP._cards_of(want):
+            bad += 1
+check("E3 %d 个合法交换的牌色与『交换后重算』逐招一致（旧读法错 5.16%%）" % tot_e3,
+      bad == 0, "不一致 %d" % bad)
 
 print("\nF. 空手：目标色 = 能做出严格多数最多的色")
 ok = True

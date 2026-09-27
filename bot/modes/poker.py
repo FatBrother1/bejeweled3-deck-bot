@@ -34,16 +34,67 @@ class Mode(_Base):
     GEO_WHY = "  ← 牌局棋盘格距 85.25、原点与经典差 34px，用错会点错格"
     DEAD_EXIT_AT = 30       # 连续无招 30 次就退出（普通模式是就地待命、不退出）
 
+    # ── 手牌结算覆盖层（2026-09-27 新增）─────────────────────────
+    #   区域 = 中央横排 5 张白卡所在的那一条；判据 = 白像素（min(R,G,B)>200）占比。
+    #   实测（1280x800 真实帧，本机复算）：
+    #       结算覆盖层   0.475
+    #       正常对局     0.004
+    #       游戏结束画面 0.000
+    #   阈值 0.15 两侧余量都在 3 倍以上。
+    #
+    #   ★ 为什么必须认它（风暴的真因）★
+    #     打满 5 张牌时游戏在中央弹一排白卡 + 牌型名 + 「+分数」（约 2 秒动画，
+    #     金色星星飞散）。这段窗口游戏**不接受交换**，而它的判据是白卡带
+    #     （R-B≈0），引擎那两个通用画面判据（结算面板/徽章面板，都靠暖色占比）
+    #     一个都命中不了 ⇒ bot 照常出手、必被拒 ⇒ 见 choose() 里那段说明。
+    SETTLE_BAND = (570, 330, 1010, 470)      # x0, y0, x1, y1
+    SETTLE_WHITE = 0.15
+
     def detect(self, ctx):
         # 牌局靠画面认（左侧 7 行绿色分值表），由 detect_mode() 在引擎里做，
         # 这里不重复。返回 False，让注册表继续往下走。
         return False
 
+    def settle_overlay(self, frame):
+        """是不是「手牌结算覆盖层」。True / False / None（None = 判不了）。
+
+        判据与实测见类常量注释。拿不到帧或帧太小返回 None（不认领）。
+        """
+        if frame is None:
+            return None
+        try:
+            import numpy as np
+            f = np.asarray(frame, dtype="float32")
+            if f.ndim != 3 or f.shape[0] < 480 or f.shape[1] < 1020:
+                return None
+            x0, y0, x1, y1 = self.SETTLE_BAND
+            p = f[y0:y1, x0:x1]
+            return bool((p.min(axis=2) > 200).mean() > self.SETTLE_WHITE)
+        except Exception:
+            return None
+
+    def overlay_action(self, ctx):
+        """手牌结算覆盖层：等它放完，这一步不出手。
+
+        为什么是"等"而不是"点掉"：实测它是**动画**（约 2 秒，金色星星飞散），
+        自己会消失，不需要点；点了反而可能点到棋盘格。
+        清空拉黑：这段窗口里的拒绝是画面造成的、不是招不好，留着会把盘掩死。
+        """
+        if self.settle_overlay(ctx.get("frame")) is True:
+            return {"name": "手牌结算覆盖层",
+                    "what": "等它放完（这段窗口游戏不接受交换）",
+                    "wait": 1.0, "clear_blacklist": True}
+        return None
+
     def choose(self, ctx):
         import poker as pk
         import solver_poker
 
-        g = ctx["g"]
+        # ★ 用真实棋盘：掩码（拉黑格改写 '?'）对牌局有害无益 ——
+        #   '?' 不但自己不能连线、还会切断别人的连线，而牌局盘本来就只有几招
+        #   （随机稳定盘统计：中位 11 招、≤3 招的比例 0.0%），几个掩码就足以
+        #   造出假死局。掩码原本的作用（别重选刚被拒的招）由下面的 banned 过滤承担。
+        g = ctx["g_raw"]
         fr = ctx["frame"]
         if fr is None:
             fr = ctx["get_frame"]()
@@ -62,6 +113,23 @@ class Mode(_Base):
         # 严格多数"挑一个能持续产出的色当目标（第 17 轮的规则，当时被这条
         # 分支挡在外面、从没在实战里跑过）。
         rk = solver_poker.rank_moves_poker(g, hand=hand, topk=10)
+
+        # ★ 走法级拉黑（2026-09-27 补）：`rank_moves_poker` 没有 banned 参数，
+        #   原来被拒的招每一步都会被重选 —— 实测同一招连试 3 次、把那 2 格拉黑到
+        #   阈值 3，掩码随即把盘上仅剩的招全掩掉（「无走法风暴」的完整链条）。
+        #   普通求解器 `solver_pro.rank_moves` 一直有这个参数，牌局这条漏了。
+        ban = ctx["banned"] | ctx["banned_sticky"]
+        if rk and ban:
+            rk_ok = [t for t in rk if frozenset((t[5], t[6])) not in ban]
+            if rk_ok:
+                rk = rk_ok
+            else:
+                # 候选全被拉黑 = 刚才每一步都被拒。可能是结算窗口那种"画面造成的
+                # 拒绝"（棋盘其实没变），也可能是真的没法走。解禁一次重算 ——
+                # 不解禁就会在原地打转，最后按「无走法」退出。
+                ctx["log"]("  ★ 候选 %d 条全被走法级拉黑 → 解禁重算"
+                           "（棋盘没变，可能是画面造成的假拒绝）" % len(rk))
+                ctx["banned"].clear(); ctx["banned_sticky"].clear()
         if not rk:
             return None
         t = rk[0]

@@ -81,16 +81,30 @@ _LAST_WHY = [None]
 UNCERTAIN_PENALTY = 1
 
 
-def _colors_in_move(g, sim_result):
+def _colors_in_move(g, sim_result, swap=None):
     """算出这一步会消掉哪些颜色的宝石，各多少个。
 
     sim_result 是 solver_pro.simulate 的返回值，
     其中 first_cells 是首层消除的格子坐标列表。
+
+    ★ 2026-09-27 修：必须**在交换后的棋盘上**读 ★
+      原来直接在传入的 g（= 交换前的棋盘）上读 first_cells 的颜色，而被交换的
+      那两格恰好总在首层消除里 ⇒ 它们的颜色读到的是**换过去之前**那一颗 ⇒
+      多数色判错。实测 400 随机盘、31,757 个合法交换：**5.16% 估错**，
+      而且错的全是同一个方向 —— 把「并列多数」读成「严格多数」
+      （样本：求解器判 R 严格多数、真实是 R/W 并列）。
+      牌的花色由多数色决定，并列时游戏给哪色未知 ⇒ 高估确定性会让计划去追
+      一个可能拿不到的颜色，日志里的 `★严格多数` 标记也跟着失真。
     """
     total, casc, first_cells, first_runs, specials, final = sim_result
+    gg = g
+    if swap is not None:
+        (i, j), (i2, j2) = swap
+        gg = [row[:] for row in g]
+        gg[i][j], gg[i2][j2] = gg[i2][j2], gg[i][j]
     cnt = {}
     for (r, c) in first_cells:
-        ch = g[r][c] if 0 <= r < 8 and 0 <= c < 8 else None
+        ch = gg[r][c] if 0 <= r < 8 and 0 <= c < 8 else None
         if ch and ch != "?":
             cnt[ch] = cnt.get(ch, 0) + 1
     return cnt
@@ -243,7 +257,8 @@ def rank_moves_poker(g, hand=None, target=None, w_special=8.0, topk=0):
                 total, casc, first_cells, first_runs, spec, final = sim
                 if total <= 0:
                     continue
-                moves.append((sim, _colors_in_move(g, sim), i, j, i2, j2, is_cube))
+                moves.append((sim, _colors_in_move(g, sim, swap=((i, j), (i2, j2))),
+                              i, j, i2, j2, is_cube))
 
     if not moves:
         _LAST_TARGET[0] = None

@@ -616,6 +616,45 @@ def main():
                 time.sleep(1.2)
                 continue
 
+            # ★★ 模式专属挡路画面（2026-09-27 新增）★★
+            #   牌局的「手牌结算覆盖层」就是这一类：打满 5 张牌时中央横排 5 张
+            #   白卡 + 牌型名 + 「+分数」，约 2 秒，那段窗口游戏**不接受交换**。
+            #   它的判据是白卡带（R-B≈0），上面两个通用判据（都靠暖色占比）
+            #   一个都命中不了 ⇒ bot 照常出手、交换必被拒。实测后果：同一招被
+            #   连试 3 次（牌局求解器原来不认走法级拉黑）→ 那 2 格拉黑到阈值 3
+            #   → 掩码把盘上仅剩的几招全掩掉 → `无走法(30)` 主动退出 → 守护
+            #   2 秒后重拉 → 1~2 分钟一轮的「无走法风暴」。
+            #   交给模式自己认：认出来就等它放完，这一步不出手、也不计死局。
+            _ov = mode.overlay_action({"frame": fr_iter, "log": log,
+                                       "extra": rd.last_extra})
+            if _ov:
+                log("  ★ 检测到%s → %s" % (_ov["name"], _ov["what"]))
+                if _ov.get("click"):
+                    try:
+                        m.click(*_ov["click"])
+                    except Exception as e:
+                        log("  点击异常: %s" % e)
+                if _ov.get("clear_blacklist"):
+                    # 这段窗口里的拒绝是画面造成的、不是招不好，留着会把盘掩死
+                    banned.clear(); banned_sticky.clear()
+                    blacklist.clear(); pending = None
+                # 等它放完：轮询判据直到不再命中（最多 8 秒）
+                _tov = time.time()
+                while time.time() - _tov < 8.0:
+                    time.sleep(max(0.2, float(_ov.get("wait", 0.6))))
+                    _fov = None
+                    if _c is not None:
+                        try:
+                            _fov = _c.get(timeout=0.5)
+                        except Exception:
+                            _fov = None
+                    if _fov is None:
+                        continue
+                    if mode.overlay_action({"frame": _fov, "log": log}) is None:
+                        break
+                dead = 0
+                continue
+
             # ★ auto 模式：运行中每 20 步复查一次（玩家可能中途换了模式）
             if a.mode_auto and done > 0 and done % 20 == 0 and fr_iter is not None:
                 dm2 = detect_mode(fr_iter)
