@@ -104,7 +104,7 @@ fi
 #     牌局   格距 85.25、原点又不同（x0=482.5 y0=113）
 #   ★ 2026-09-26 补：蝴蝶和牌局这两份原来漏在安装脚本外，全新装的机器上
 #     这两个模式会退回经典几何，等于坏掉。
-for b in board_diamond.json board_butterfly.json board_poker.json; do
+for b in board_diamond.json board_butterfly.json board_poker.json board_lightning.json; do
   [ -f "$b" ] || continue
   if [ -f "$TARGET/bjbot/$b" ]; then
     echo "   → $b 已存在，保留不覆盖"

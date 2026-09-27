@@ -305,7 +305,12 @@ class MemReader:
                  "flags": flags,
                  "timegems": timegems,          # [(行, 列, 计数), ...]
                  "butterflies": butterflies,    # [(行, 列), ...] 蝴蝶模式专用
-                 "board": board}
+                 "board": board,
+                 # ★ 棋盘对象的 vtable 指针（[Board+0x0]）—— 每个模式一个值，
+                 #   点进模式那一刻就变。which_mode.py 一直用它给插件面板认模式，
+                 #   2026-09-26 起也交给模式脚本自己认领（闪电就是这么认的：
+                 #   时间宝石只在盘上待几秒，光靠"有宝石"要等几秒才认得出）。
+                 "board_vt": pr.u32(board)}
         return grid, bad, extra
 
     # ── 接口兼容 ────────────────────────────────────────────
