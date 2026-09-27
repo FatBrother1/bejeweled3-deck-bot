@@ -1,0 +1,427 @@
+{
+ "engine": "pro",
+ "vision": "vision_np",
+ "still_ms": 250.0,
+ "moves": 40,
+ "seconds": 46.35192847251892,
+ "s0": 444470,
+ "s1": 453470,
+ "ok": 39,
+ "per_step": {
+  "drag": 182.59805989973756,
+  "wait": 887.591016292572,
+  "vision": 75.98022342472177
+ },
+ "stats": {
+  "frames": 3195,
+  "grabs": 3195,
+  "visions": 45,
+  "t_grab": 33.75237840203408,
+  "t_diff": 1.7233441340576974,
+  "t_vision": 3.0379270640150935,
+  "waits": 45,
+  "t_wait": 35503.64065170288
+ },
+ "rows": [
+  {
+   "n": 1,
+   "pred": 450,
+   "real": 50,
+   "chg": true,
+   "eff": true,
+   "drag_ms": 185.0,
+   "wait_ms": 544.2,
+   "vision_ms": 151.3
+  },
+  {
+   "n": 2,
+   "pred": 800,
+   "real": 100,
+   "chg": true,
+   "eff": true,
+   "drag_ms": 183.1,
+   "wait_ms": 620.4,
+   "vision_ms": 59.1
+  },
+  {
+   "n": 3,
+   "pred": 500,
+   "real": 500,
+   "chg": true,
+   "eff": true,
+   "drag_ms": 181.3,
+   "wait_ms": 1442.7,
+   "vision_ms": 47.3
+  },
+  {
+   "n": 4,
+   "pred": 50,
+   "real": 440,
+   "chg": true,
+   "eff": true,
+   "drag_ms": 181.1,
+   "wait_ms": 1563.5,
+   "vision_ms": 56.3
+  },
+  {
+   "n": 5,
+   "pred": 200,
+   "real": 100,
+   "chg": true,
+   "eff": true,
+   "drag_ms": 181.4,
+   "wait_ms": 860.6,
+   "vision_ms": 57.4
+  },
+  {
+   "n": 6,
+   "pred": 750,
+   "real": 0,
+   "chg": true,
+   "eff": true,
+   "drag_ms": 184.1,
+   "wait_ms": 342.5,
+   "vision_ms": 55.3
+  },
+  {
+   "n": 7,
+   "pred": 150,
+   "real": 200,
+   "chg": true,
+   "eff": true,
+   "drag_ms": 184.1,
+   "wait_ms": 279.8,
+   "vision_ms": 55.0
+  },
+  {
+   "n": 8,
+   "pred": 300,
+   "real": 0,
+   "chg": true,
+   "eff": true,
+   "drag_ms": 182.3,
+   "wait_ms": 629.2,
+   "vision_ms": 64.1
+  },
+  {
+   "n": 9,
+   "pred": 150,
+   "real": 150,
+   "chg": true,
+   "eff": true,
+   "drag_ms": 181.3,
+   "wait_ms": 439.7,
+   "vision_ms": 47.6
+  },
+  {
+   "n": 10,
+   "pred": 250,
+   "real": 150,
+   "chg": true,
+   "eff": true,
+   "drag_ms": 180.8,
+   "wait_ms": 372.8,
+   "vision_ms": 52.6
+  },
+  {
+   "n": 11,
+   "pred": 150,
+   "real": 0,
+   "chg": false,
+   "eff": false,
+   "drag_ms": 180.7,
+   "wait_ms": 276.7,
+   "vision_ms": 58.4
+  },
+  {
+   "n": 12,
+   "pred": 50,
+   "real": 210,
+   "chg": true,
+   "eff": true,
+   "drag_ms": 180.4,
+   "wait_ms": 583.3,
+   "vision_ms": 108.4
+  },
+  {
+   "n": 13,
+   "pred": 50,
+   "real": 1600,
+   "chg": true,
+   "eff": true,
+   "drag_ms": 184.7,
+   "wait_ms": 4003.8,
+   "vision_ms": 65.5
+  },
+  {
+   "n": 14,
+   "pred": 700,
+   "real": 250,
+   "chg": true,
+   "eff": true,
+   "drag_ms": 181.0,
+   "wait_ms": 689.4,
+   "vision_ms": 62.1
+  },
+  {
+   "n": 15,
+   "pred": 200,
+   "real": 50,
+   "chg": true,
+   "eff": true,
+   "drag_ms": 181.3,
+   "wait_ms": 444.4,
+   "vision_ms": 90.5
+  },
+  {
+   "n": 16,
+   "pred": 300,
+   "real": 100,
+   "chg": true,
+   "eff": true,
+   "drag_ms": 182.4,
+   "wait_ms": 604.7,
+   "vision_ms": 57.6
+  },
+  {
+   "n": 17,
+   "pred": 300,
+   "real": 150,
+   "chg": true,
+   "eff": true,
+   "drag_ms": 185.0,
+   "wait_ms": 609.4,
+   "vision_ms": 117.0
+  },
+  {
+   "n": 18,
+   "pred": 100,
+   "real": 0,
+   "chg": true,
+   "eff": true,
+   "drag_ms": 184.6,
+   "wait_ms": 307.5,
+   "vision_ms": 66.9
+  },
+  {
+   "n": 19,
+   "pred": 50,
+   "real": 50,
+   "chg": true,
+   "eff": true,
+   "drag_ms": 181.5,
+   "wait_ms": 567.3,
+   "vision_ms": 78.3
+  },
+  {
+   "n": 20,
+   "pred": 500,
+   "real": 50,
+   "chg": true,
+   "eff": true,
+   "drag_ms": 183.6,
+   "wait_ms": 479.9,
+   "vision_ms": 58.4
+  },
+  {
+   "n": 21,
+   "pred": 150,
+   "real": 500,
+   "chg": false,
+   "eff": true,
+   "drag_ms": 182.6,
+   "wait_ms": 690.6,
+   "vision_ms": 79.9
+  },
+  {
+   "n": 22,
+   "pred": 50,
+   "real": 250,
+   "chg": true,
+   "eff": true,
+   "drag_ms": 183.5,
+   "wait_ms": 886.3,
+   "vision_ms": 111.8
+  },
+  {
+   "n": 23,
+   "pred": 150,
+   "real": 0,
+   "chg": true,
+   "eff": true,
+   "drag_ms": 181.3,
+   "wait_ms": 941.1,
+   "vision_ms": 49.0
+  },
+  {
+   "n": 24,
+   "pred": 950,
+   "real": 0,
+   "chg": true,
+   "eff": true,
+   "drag_ms": 185.5,
+   "wait_ms": 273.7,
+   "vision_ms": 48.7
+  },
+  {
+   "n": 25,
+   "pred": 1250,
+   "real": 0,
+   "chg": true,
+   "eff": true,
+   "drag_ms": 181.7,
+   "wait_ms": 270.9,
+   "vision_ms": 60.6
+  },
+  {
+   "n": 26,
+   "pred": 150,
+   "real": 50,
+   "chg": true,
+   "eff": true,
+   "drag_ms": 182.8,
+   "wait_ms": 272.4,
+   "vision_ms": 51.9
+  },
+  {
+   "n": 27,
+   "pred": 550,
+   "real": 50,
+   "chg": true,
+   "eff": true,
+   "drag_ms": 183.5,
+   "wait_ms": 273.8,
+   "vision_ms": 107.0
+  },
+  {
+   "n": 28,
+   "pred": 550,
+   "real": 300,
+   "chg": true,
+   "eff": true,
+   "drag_ms": 183.5,
+   "wait_ms": 576.7,
+   "vision_ms": 50.0
+  },
+  {
+   "n": 29,
+   "pred": 350,
+   "real": 200,
+   "chg": true,
+   "eff": true,
+   "drag_ms": 181.8,
+   "wait_ms": 587.0,
+   "vision_ms": 51.5
+  },
+  {
+   "n": 30,
+   "pred": 200,
+   "real": 300,
+   "chg": true,
+   "eff": true,
+   "drag_ms": 181.8,
+   "wait_ms": 1556.7,
+   "vision_ms": 74.2
+  },
+  {
+   "n": 31,
+   "pred": 550,
+   "real": 50,
+   "chg": true,
+   "eff": true,
+   "drag_ms": 181.6,
+   "wait_ms": 1198.0,
+   "vision_ms": 50.7
+  },
+  {
+   "n": 32,
+   "pred": 50,
+   "real": 50,
+   "chg": true,
+   "eff": true,
+   "drag_ms": 182.6,
+   "wait_ms": 271.8,
+   "vision_ms": 102.5
+  },
+  {
+   "n": 33,
+   "pred": 800,
+   "real": 1150,
+   "chg": false,
+   "eff": true,
+   "drag_ms": 183.4,
+   "wait_ms": 4002.2,
+   "vision_ms": 75.5
+  },
+  {
+   "n": 34,
+   "pred": 150,
+   "real": 200,
+   "chg": true,
+   "eff": true,
+   "drag_ms": 181.6,
+   "wait_ms": 2655.8,
+   "vision_ms": 120.0
+  },
+  {
+   "n": 35,
+   "pred": 300,
+   "real": 0,
+   "chg": true,
+   "eff": true,
+   "drag_ms": 183.1,
+   "wait_ms": 934.2,
+   "vision_ms": 65.9
+  },
+  {
+   "n": 36,
+   "pred": 100,
+   "real": 200,
+   "chg": true,
+   "eff": true,
+   "drag_ms": 183.7,
+   "wait_ms": 345.2,
+   "vision_ms": 159.0
+  },
+  {
+   "n": 37,
+   "pred": 250,
+   "real": 150,
+   "chg": true,
+   "eff": true,
+   "drag_ms": 185.5,
+   "wait_ms": 818.5,
+   "vision_ms": 71.6
+  },
+  {
+   "n": 38,
+   "pred": 150,
+   "real": 50,
+   "chg": true,
+   "eff": true,
+   "drag_ms": 182.2,
+   "wait_ms": 631.8,
+   "vision_ms": 68.9
+  },
+  {
+   "n": 39,
+   "pred": 500,
+   "real": 0,
+   "chg": true,
+   "eff": true,
+   "drag_ms": 182.4,
+   "wait_ms": 276.8,
+   "vision_ms": 69.4
+  },
+  {
+   "n": 40,
+   "pred": 100,
+   "real": 150,
+   "chg": true,
+   "eff": true,
+   "drag_ms": 180.3,
+   "wait_ms": 276.8,
+   "vision_ms": 133.4
+  }
+ ]
+}

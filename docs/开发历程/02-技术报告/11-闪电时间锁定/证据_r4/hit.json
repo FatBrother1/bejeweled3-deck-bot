@@ -1,0 +1,46 @@
+[
+ {
+  "addr": "0xF39E974",
+  "axis": "i4_s"
+ },
+ {
+  "addr": "0xF39F124",
+  "axis": "i4_s"
+ },
+ {
+  "addr": "0xF39F244",
+  "axis": "i4_s"
+ },
+ {
+  "addr": "0xF39F424",
+  "axis": "i4_s"
+ },
+ {
+  "addr": "0xF39F454",
+  "axis": "i4_s"
+ },
+ {
+  "addr": "0xF39F4B4",
+  "axis": "i4_s"
+ },
+ {
+  "addr": "0xF39F514",
+  "axis": "i4_s"
+ },
+ {
+  "addr": "0xF39F5A4",
+  "axis": "i4_s"
+ },
+ {
+  "addr": "0xF3A58F8",
+  "axis": "i4_s"
+ },
+ {
+  "addr": "0x100DD278",
+  "axis": "i4_s"
+ },
+ {
+  "addr": "0x100DE2D8",
+  "axis": "i4_s"
+ }
+]
