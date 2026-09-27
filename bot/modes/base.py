@@ -42,6 +42,13 @@ class Mode(object):
     #（普通模式：退出会被守护立刻拉起、对着同一块冻结盘再打一轮）。
     DEAD_EXIT_AT = None
 
+    # ── 万变魔方（超立方体，字形 'S'）策略 ──────────────────────
+    # 两个都取"不管"的默认值 ⇒ 不声明它们的模式行为与从前逐字节一致。
+    #   造一个魔方加多少分（0 = 不管）
+    W_MAKE_HYPER = 0.0
+    #   True = 有别的招就不动魔方（魔方招排最后，但仍留在候选表里）
+    SAVE_HYPER = False
+
     # ── 检测 ────────────────────────────────────────────────
     def detect(self, ctx):
         """从棋盘特征认出自己。注册表里先匹配先赢，兜底模式返回 False。"""
@@ -58,6 +65,20 @@ class Mode(object):
         return
 
     # ── 选步 ────────────────────────────────────────────────
+    def solver_kw(self):
+        """交给求解器的模式专属权重。默认两个都是"不管"。"""
+        return {"w_make_hyper": self.W_MAKE_HYPER, "save_hyper": self.SAVE_HYPER}
+
+    def _all_hyper(self, g, rk):
+        """候选表是不是清一色「要动魔方」的招（空表返回 False）。"""
+        if not rk:
+            return False
+        for t in rk:
+            (i1, j1), (i2, j2) = t[6], t[7]
+            if g[i1][j1] != "S" and g[i2][j2] != "S":
+                return False
+        return True
+
     def choose(self, ctx):
         """普通三消的选步链：求解 → 两道假死局兜底 → 取第一名。
 
@@ -67,6 +88,12 @@ class Mode(object):
           ② 被游戏拒过的招会被 banned 挡掉；若所有合法招恰好都被挡掉，
              第①层也救不回来（它带着 banned 一起算）。
         两层都必须用 g_raw 重算 —— 用掩码版等于没救（蝴蝶模式实测趴窝 15 分钟）。
+
+        ★ 2026-09-27 加了第 ①b 层（只有 SAVE_HYPER 的模式走）：掩码把普通招
+          掩光之后，候选表里**只剩下魔方招**，而魔方招永远非空 ⇒ 第①层的
+          「0 候选」条件永远不成立，于是 bot 会把攒着的魔方当普通招用掉。
+          实测掩码是常态（日志里 `掩码格 17` 那一行），所以这一层必须有：
+          候选表只剩魔方招时，拿真实棋盘再算一遍，真有普通招就换成普通招。
         """
         g = ctx["g"]; g_raw = ctx["g_raw"]
         extra = ctx["extra"] or {}
@@ -75,21 +102,33 @@ class Mode(object):
         bf = extra.get("butterflies") or []
         self.on_board_info(ctx, tg, bf)
         banned = ctx["banned"] | ctx["banned_sticky"]
+        kw = self.solver_kw()
 
         rk = solver_pro.rank_moves(g, timegems=tg, banned=banned,
-                                   flags=fl, butterflies=bf)
+                                   flags=fl, butterflies=bf, **kw)
         if not rk and ctx["blacklist"]:
             rk_raw = solver_pro.rank_moves(g_raw, timegems=tg, banned=banned,
-                                           flags=fl, butterflies=bf)
+                                           flags=fl, butterflies=bf, **kw)
             if rk_raw:
                 ctx["log"]("  ★ 拉黑掩码掩出了假死局 → 清空拉黑，按真实棋盘走"
                            "（候选 %d，掩码格 %d）" % (len(rk_raw), len(ctx["blacklist"])))
                 ctx["blacklist"].clear()
                 ctx["g"] = [r[:] for r in g_raw]
                 rk = rk_raw
+        # ★ ①b 掩码把普通招掩光了、只剩魔方招 —— 不动魔方，用真实棋盘重算
+        if (self.SAVE_HYPER and ctx["blacklist"] and self._all_hyper(g, rk)):
+            rk_raw = solver_pro.rank_moves(g_raw, timegems=tg, banned=banned,
+                                           flags=fl, butterflies=bf, **kw)
+            if rk_raw and not self._all_hyper(g_raw, rk_raw):
+                ctx["log"]("  ★ 掩码把普通招掩光了（只剩魔方招，掩码格 %d）"
+                           "→ 用真实棋盘重算，先不动魔方（候选 %d）"
+                           % (len(ctx["blacklist"]), len(rk_raw)))
+                ctx["blacklist"].clear()
+                ctx["g"] = [r[:] for r in g_raw]
+                rk = rk_raw
         if not rk and (ctx["banned"] or ctx["banned_sticky"]):
             rk_free = solver_pro.rank_moves(g_raw, timegems=tg, banned=set(),
-                                            flags=fl, butterflies=bf)
+                                            flags=fl, butterflies=bf, **kw)
             if rk_free:
                 ctx["log"]("  ★ 合法走法全被拉黑 → 解禁重算（候选 %d，原 ban %d 条，"
                            "掩码格 %d）"

@@ -197,9 +197,27 @@ def potential(g):
             if ok(a) and a == c and b != a: n += 1
     return n
 
+# ★ 万变魔方（超立方体）用掉时要扣的分。见 rank_moves 的 save_hyper。
+#   普通招的分数在几十~几千这个量级，扣 10 亿 = 把魔方招钉死在候选表最后；
+#   它仍然留在候选表里 —— 一条普通招都没有时，它就是第一名。
+HYPER_USE_PENALTY = 1e9
+
+
 def rank_moves(g, w_special=8.0, w_row=2.0, w_pot=2.0, topk=0, timegems=None,
-               banned=None, flags=None, butterflies=None):
+               banned=None, flags=None, butterflies=None,
+               w_make_hyper=0.0, save_hyper=False):
     """给所有走法打分。
+
+    w_make_hyper: 每造出一个万变魔方加多少分（0 = 不管，行为与从前一致）。
+      ★ 经典模式的策略（2026-09-27）：魔方是"保命牌"—— 只要盘上还有魔方，
+        游戏就不会因为"没有可消的宝石"而结束，而且魔方**能带进下一关**。
+        所以能造就该造：一条 5 连就能造一个（`runs` 里长度 >= 5 的那几条）。
+        注意 5 连必须是**普通交换**造出来的；拿魔方去引爆的招 `runs` 是假的
+        （`simulate` 给的是被引爆的格数），所以那种招不给这个加成。
+    save_hyper: True = 有别的招就不动魔方（魔方招一律排最后，但仍留在候选表）。
+      ★ 这是"没有可消的三连宝石再用魔方"那句话的实现：不是禁用，是降到最后。
+        一条普通招都没有时 `rk[0]` 就是魔方招，照常能用。
+      ★ 默认 False ⇒ 不传这两个参数的调用方行为与从前逐字节一致（可回滚、可 A/B）。
 
     timegems: [(行, 列, 计数), ...] —— 闪电模式的时间宝石位置。
       ★ 有它时必须优先去消：闪电模式是限时的，不拿时间宝石就等着时间耗尽。
@@ -232,6 +250,7 @@ def rank_moves(g, w_special=8.0, w_row=2.0, w_pot=2.0, topk=0, timegems=None,
                 # 'D'=钻石矿泥土：游戏不允许交换泥块，直接跳过
                 if a in ("?", "D", None) or b in ("?", "D", None): continue
                 if a == b: continue
+                uses_hyper = (a == "S" or b == "S")
                 total, casc, cells, runs, spec, fg = simulate(g, i, j, i2, j2,
                                                              flags=flags)
                 if total <= 0: continue
@@ -239,6 +258,17 @@ def rank_moves(g, w_special=8.0, w_row=2.0, w_pot=2.0, topk=0, timegems=None,
                 avg_row = (sum(r for r, _ in cells) / len(cells)) if cells else 0.0
                 pot = potential(fg)
                 score = total + w_special * spec + w_row * avg_row + w_pot * pot
+                # ★ 造魔方（经典模式）：首层 5 连 = 一个万变魔方。
+                #   拿魔方引爆的招不算 —— 那种招 simulate 返回的 runs 是被引爆
+                #   的格数，不是连线长度。
+                if w_make_hyper and not uses_hyper:
+                    made = sum(1 for n in runs if n >= 5)
+                    if made:
+                        score += w_make_hyper * made
+                # ★ 攒魔方（经典模式）：这一步要动魔方就扣到底，但留着它 ——
+                #   候选表里还有它，只是排到最后（一条普通招都没有时才轮到它）。
+                if save_hyper and uses_hyper:
+                    score -= HYPER_USE_PENALTY
                 if has_dirt:
                     digs = 0.0
                     for (ci, cj) in set(cells):

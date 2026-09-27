@@ -7,7 +7,9 @@
   A. 注册表：8 个模式全部加载，KEY/NAME/GEO/EFFECTIVE 齐全
   B. 几何映射：新模式表与旧 if 表逐项一致
   C. 有效判据：新模式表与旧条件 `nd>0 or poker` 逐项一致
-  D. 普通模式选步 == 直接调 solver_pro.rank_moves（旧代码就是这一句）
+  D. 普通模式选步 == 带模式权重的 solver_pro.rank_moves
+     （2026-09-27 起经典模式多了「万变魔方」权重，参照系要带上它；
+       策略本身在 test_hyper.py 里单测）
   E. 两道假死局兜底真的会救（掩码致 0 候选 / 合法走法全被 ban）
   F. 牌局模式选步 == 旧牌局分支（两种手牌状态各测）
   G. 模式粘性规则：classic/poker 跟着走，diamond/butterfly/lightning 粘住
@@ -79,6 +81,9 @@ for nd, is_poker, want in OLD_EFF:
           % (nd, is_poker, m.EFFECTIVE, want), m.EFFECTIVE == want)
 
 print("\nD. 普通模式选步 == 直接调 solver_pro.rank_moves（200 盘）")
+# ★ 2026-09-27：经典模式加了「万变魔方」策略（造魔方加权 + 有别的招不动魔方），
+#   所以参照系要带上它自己的权重 —— 这条测的是「引擎只转发、不自己决策」，
+#   模式权重变了它就该跟着变（策略本身在 test_hyper.py 里单测）。
 cls = modes.by_key("classic")
 bad = 0
 for seed in range(200):
@@ -86,7 +91,7 @@ for seed in range(200):
     c = ctx_for(g)
     res = cls.choose(c)
     ref = solver_pro.rank_moves(g, timegems=[], banned=set(), flags={},
-                                butterflies=[])
+                                butterflies=[], **cls.solver_kw())
     if not ref:
         if res is not None:
             bad += 1
@@ -96,7 +101,7 @@ for seed in range(200):
         if bad <= 2:
             print("     反例 seed=%d res=%s ref=%s" % (seed, res and res["cells"],
                                                        (ref[0][6], ref[0][7])))
-check("200 盘首选走法与旧代码逐项一致", bad == 0, "不一致 %d" % bad)
+check("200 盘首选走法与带模式权重的求解器逐项一致", bad == 0, "不一致 %d" % bad)
 
 print("\nE. 两道假死局兜底")
 # 造一个"掩码把候选杀光"的局面：先取一个真有解的局面
