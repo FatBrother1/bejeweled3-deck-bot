@@ -5,7 +5,7 @@
   gamescopectl screenshot  : 2.2 fps (450ms/帧，PNG 编码瓶颈)
   pipewiresrc + fdsink     : 90 fps (11.1ms/帧，原始 RGB 3072000 字节)
 """
-import os, subprocess, threading, time
+import os, subprocess, threading, time, json
 import numpy as np
 
 W, H, FRAME = 1280, 800, 1280 * 800 * 3
@@ -14,13 +14,41 @@ GST = ["gst-launch-1.0", "-q", "pipewiresrc", "path=93",
        "!", "fdsink", "fd=1"]
 
 
+def find_video_node():
+    """从 pw-dump 里找 gamescope 视频源节点的 id；找不到返回 None。
+
+    ★ 2026-09-27（bot 变瞎那次）：原来把 path=93 写死。节点 id 不是常量 ——
+      换一次会话就可能变，节点整条消失时更是一个都没有。写死的结果是
+      `pw-cli info 93` 报 no global、gst 立刻 EOF，bot 从此瞎着。
+    """
+    try:
+        out = subprocess.run(["pw-dump"], stdout=subprocess.PIPE,
+                             stderr=subprocess.DEVNULL, timeout=5).stdout
+        nodes = json.loads(out.decode("utf-8", "replace"))
+    except Exception:
+        return None
+    first = None
+    for n in nodes:
+        if not isinstance(n, dict) or not str(n.get("type", "")).endswith("Node"):
+            continue
+        p = (n.get("info") or {}).get("props") or {}
+        if p.get("media.class") != "Video/Source":
+            continue
+        if "gamescope" in str(p.get("node.name", "")):
+            return n.get("id")            # 点名 gamescope 的那个
+        if first is None:
+            first = n.get("id")           # 没有点名的就用第一个视频源
+    return first
+
+
 class PwCapture:
     """后台线程持续读帧，只保留最新一帧（丢弃积压，保证低延迟）。"""
 
-    def __init__(self, path=93, width=1280, height=800):
+    def __init__(self, path=None, width=1280, height=800):
         self.w, self.h = width, height
         self.frame_bytes = width * height * 3
-        self.path = path
+        self.auto = (path is None)
+        self.path = 93 if path is None else path
         self.proc = None
         self.latest = None
         self.seq = 0
@@ -28,7 +56,11 @@ class PwCapture:
         self.lock = threading.Lock()
         self.err = None
 
-    def start(self):
+    def start(self, wait=8.0):
+        if self.auto:
+            nid = find_video_node()
+            if nid is not None:
+                self.path = nid
         cmd = [c if c != "path=93" else "path=%d" % self.path for c in GST]
         self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
                                      stderr=subprocess.DEVNULL,
@@ -38,7 +70,7 @@ class PwCapture:
         self.t.start()
         # 等首帧
         t0 = time.time()
-        while self.latest is None and time.time() - t0 < 8:
+        while self.latest is None and time.time() - t0 < wait:
             time.sleep(0.02)
         return self.latest is not None
 

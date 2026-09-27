@@ -13,7 +13,10 @@
 import argparse, json, os, sys, time, ctypes, struct, subprocess
 import numpy as np
 sys.path.insert(0, "/home/deck")
-from capture_pw import PwCapture
+# ★ 2026-09-27：抓帧改用 cap2.Cap（PipeWire 优先，坏了自动退 gamescopectl，
+#   节点回来了再切回去）。原来直接 PwCapture()：视频节点一消失就 log 一行
+#   然后 return，守护每十几秒拉起来一次、永远瞎着。
+from cap2 import Cap
 from reader_fast import FastReader
 from vmouse2 import VMouse2
 from vision_np import BOARD
@@ -397,8 +400,10 @@ def main():
                          % "、".join(modes.keys()))
     a = ap.parse_args()
     a.mode_auto = (a.mode == "auto")     # 记下是不是自动模式（后面 a.mode 会被改写）
-    cap = PwCapture()
-    if not cap.start(): log("抓帧失败: %s" % cap.err); return
+    cap = Cap(log=log)
+    if not cap.start():
+        log("抓帧失败: %s（PipeWire 和 gamescopectl 两条路都不行）" % cap.err); return
+    log("  抓帧后端: %s" % cap.backend)
     # ★ 后端选择：--vision auto（默认）优先内存，不可用则自动降级到视觉。
     #   内存的偏移依赖游戏版本；游戏一更新就可能失效，必须能自己退回去。
     use_mem = (a.vision == "mem")

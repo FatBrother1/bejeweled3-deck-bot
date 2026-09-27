@@ -75,10 +75,15 @@ PY
 }
 # ★ 2026-09-26 模式脚本化：bot_v6.py 现在 import modes 这个包，
 #   而且守护会按检测到的模式拉起 bot_<模式>.py —— 这两样都必须装。
+# ★ 2026-09-27 补三个漏掉的硬依赖：
+#     cap2.py      —— 引擎的抓帧入口（PipeWire 坏了退 gamescopectl），不装起不来
+#     reader_mem.py—— --vision auto/mem 的内存后端（不装自动降级成视觉）
+#     which_mode.py—— watch2.py 靠它认模式（不装守护只能 --mode auto）
 for f in bot_v6.py \
          bot_classic.py bot_zen.py bot_lightning.py bot_icescape.py \
          bot_butterfly.py bot_diamond.py bot_poker.py bot_quest.py \
-         reader_fast.py capture_pw.py vision_np.py solver_pro.py vmouse2.py \
+         reader_fast.py capture_pw.py cap2.py vision_np.py solver_pro.py \
+         reader_mem.py which_mode.py vmouse2.py \
          watch2.py run2.sh; do
   copy_one "$f"
 done
