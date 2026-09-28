@@ -58,6 +58,16 @@ class Mode(_Base):
             return True
         return bool(extra.get("timegems"))
 
+    # ★ 2026-09-28（机制来自萌娘百科/17173 攻略）：时间宝石是「每颗下落的
+    #   宝石按几率转化」⇒ 消除总量越大、出得越多；而特殊宝石（火焰炸 3×3、
+    #   闪电清行列、暴烈极速下主动消除全部爆炸）是拉高单步消除量的主要手段。
+    #   把 w_special 从默认 8.0 提到 10.0，让造/引特宝的招略微前置。
+    #   只影响闪电模式；其它模式不传仍走 8.0。
+    W_SPECIAL = 10.0
+
+    def solver_kw(self):
+        return dict(super().solver_kw(), w_special=self.W_SPECIAL)
+
     def on_board_info(self, ctx, tg, bf):
         if tg:
             ctx["log"]("  ⏱ 时间宝石 %d 个: %s"

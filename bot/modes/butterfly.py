@@ -20,6 +20,10 @@ class Mode(_Base):
     GEO = "butterfly"
     EFFECTIVE = "score"
     GEO_WHY = "  ← 蝴蝶模式棋盘比经典低约 58px、格距更小，用错会点错格"
+    # ★ 2026-09-28（机制来自萌娘百科）：底端的宝石（超能除外）每步随机变
+    #   蝴蝶 ⇒ 盘上多一枚超能、尤其沉到底部，就少一个蝴蝶出生点。
+    #   造魔方是 5 连 ⇒ 权重给到能盖过同等分数的普通招、远小于消蝴蝶的 1e5。
+    W_MAKE_HYPER = 1500.0
 
     def __init__(self):
         self._prev_n = 0        # 上一帧的蝴蝶只数（只在变化时打日志，别每步刷）
@@ -33,3 +37,6 @@ class Mode(_Base):
             ctx["log"]("  🦋 蝴蝶 %d 只: %s  ← 飞到顶行就结束，优先消"
                        % (len(bf), ", ".join("(%d,%d)" % p for p in bf)))
             self._prev_n = len(bf)
+
+    def solver_kw(self):
+        return dict(super().solver_kw(), w_make_hyper=self.W_MAKE_HYPER)

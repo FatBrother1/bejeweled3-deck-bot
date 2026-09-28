@@ -205,7 +205,8 @@ HYPER_USE_PENALTY = 1e9
 
 def rank_moves(g, w_special=8.0, w_row=2.0, w_pot=2.0, topk=0, timegems=None,
                banned=None, flags=None, butterflies=None,
-               w_make_hyper=0.0, save_hyper=False):
+               w_make_hyper=0.0, save_hyper=False,
+               w_vertical=0.0, w_starcol=0.0, w_hyper2=0.0):
     """给所有走法打分。
 
     w_make_hyper: 每造出一个万变魔方加多少分（0 = 不管，行为与从前一致）。
@@ -249,7 +250,21 @@ def rank_moves(g, w_special=8.0, w_row=2.0, w_pot=2.0, topk=0, timegems=None,
                 a, b = g[i][j], g[i2][j2]
                 # 'D'=钻石矿泥土：游戏不允许交换泥块，直接跳过
                 if a in ("?", "D", None) or b in ("?", "D", None): continue
-                if a == b: continue
+                # ★ 双超能对撞（2026-09-28，资料：萌娘百科宝石迷阵3）：
+                #   两枚超能互换 ⇒ 清空整个版面（钻石矿连土块、冰风暴连冰柱），
+                #   经典/禅境返还两枚、冰风暴返还一枚。模拟器没法算"清全盘"
+                #   （会破坏可回滚性），所以这里只按权重直接给分，不走 simulate。
+                #   w_hyper2=0（默认）⇒ 行为与从前逐字节一致。
+                #   ★ 必须放在 a==b 的 continue 之前 —— S==S 会被那条跳过。
+                if a == b:
+                    if a == "S" and w_hyper2:
+                        out.append((w_hyper2, 500, 64, 1, 3, 0.0,
+                                    (i, j), (i2, j2), g, []))
+                    continue
+                if a == "S" and b == "S" and w_hyper2:
+                    out.append((w_hyper2, 500, 64, 1, 3, 0.0,
+                                (i, j), (i2, j2), g, []))
+                    continue
                 uses_hyper = (a == "S" or b == "S")
                 total, casc, cells, runs, spec, fg = simulate(g, i, j, i2, j2,
                                                              flags=flags)
@@ -269,6 +284,22 @@ def rank_moves(g, w_special=8.0, w_row=2.0, w_pot=2.0, topk=0, timegems=None,
                 #   候选表里还有它，只是排到最后（一条普通招都没有时才轮到它）。
                 if save_hyper and uses_hyper:
                     score -= HYPER_USE_PENALTY
+                # ★ 冰风暴（2026-09-28，机制来自萌娘百科宝石迷阵3）：
+                #   纵向匹配把所在列的冰柱往下压、闪电宝石（flag 4）清掉
+                #   本行本列 ⇒ 两者都直接压柱。普通横向消除不压柱。
+                #   两个权重默认 0 ⇒ 其它模式行为与从前逐字节一致。
+                if w_vertical and runs and not uses_hyper:
+                    k = 0
+                    for n in runs:
+                        chunk = cells[k:k + n]; k += n
+                        if chunk and len(set(c for _, c in chunk)) == 1:
+                            score += w_vertical
+                            break
+                if w_starcol and flags and cells:
+                    for c in cells:
+                        if flags.get(c, 0) & 4:
+                            score += w_starcol
+                            break
                 if has_dirt:
                     digs = 0.0
                     for (ci, cj) in set(cells):
